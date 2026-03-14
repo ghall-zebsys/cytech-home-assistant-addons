@@ -1,5 +1,6 @@
 {
-  "name": "Comfort to MQTT Home Assistant Add-on",
-  "url": "https://github.com/djagerif/comfort2mqtt",
-  "maintainer": "Ingo de Jager"
+  "name": "Cytech Comfort Home Assistant Add-ons",
+  "url": "https://github.com/ghall-zebsys/cytech-home-assistant-addons",
+  "maintainer": "Geoff Hall"
 }
+

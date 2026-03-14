@@ -1,13 +1,13 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.0"
+version: "1.0.3"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
 apparmor: true
 panel_icon: "mdi:alarm-panel-outline"
 codenotary: notary@home-assistant.io
-#url: https://github.com/djagerif/comfort2mqtt
+url: https://github.com/ghall-zebsys/cytech-home-assistant-addons
 hassio_api: true
 uart: true
 devices:
