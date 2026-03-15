@@ -955,7 +955,7 @@ class Comfort2(mqtt.Client):
                             "identifiers": ["cytech_comfort_mqtt"],
                             "manufacturer": "Cytech Technology Pte Ltd",
                             "sw_version": ADDON_VERSION,
-                            "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                            "hw_version": "Comfort Panel",
                             "model": "Comfort"
                           }
         else:
@@ -963,7 +963,7 @@ class Comfort2(mqtt.Client):
                             "identifiers": ["cytech_comfort_mqtt"],
                             "manufacturer": "Cytech Technology Pte Ltd",
                             "sw_version": ADDON_VERSION,
-                            "hw_version": "Alpine Linux " + ALPINE_VERSION,
+                            "hw_version": "Comfort Panel",
                             "configuration_url": "homeassistant://hassio/addon/" + ADDON_SLUG + "/info",
                             "model": "Comfort"
                         }
@@ -3141,7 +3141,7 @@ def validate_certificate(certificate):
     except crypto.Error as e:
         raise ValueError(f"Error loading certificate: {e}")
 
-mqttc = Comfort2(callback_api_version = mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id, protocol=mqtt.MQTTv5, transport=MQTT_PROTOCOL)
+mqttc = Comfort2(callback_api_version = mqtt.CallbackAPIVersion.VERSION2, client_id=settings.mqtt_client_id, protocol=mqtt.MQTTv5, transport=settings.MQTTPROTOCOL)
 
 certs: str = "/config/certificates"                 # Certificates directory directly off the root.
 if settings.MQTTENCRYPTION and not os.path.isdir(certs):    # Display warning if Encryption is enabled but certificates directory is not found.
