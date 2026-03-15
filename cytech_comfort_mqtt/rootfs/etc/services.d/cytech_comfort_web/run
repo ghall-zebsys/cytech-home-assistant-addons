@@ -1,0 +1,12 @@
+#!/usr/bin/with-contenv bashio
+set -e
+
+APP="/comfort2/webapp.py"
+
+if [ ! -f "$APP" ]; then
+  bashio::log.error "Ingress UI entrypoint not found: $APP"
+  exit 1
+fi
+
+bashio::log.info "Starting Comfort Ingress Web UI on :8099"
+exec python3 -u "$APP"

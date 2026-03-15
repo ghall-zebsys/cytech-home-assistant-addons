@@ -18,8 +18,6 @@ MQTT_CLIENT_KEY=$(bashio::config 'broker_client_key')
 MQTT_LOG_LEVEL=$(bashio::config 'log_verbosity')
 COMFORT_INPUTS=$(bashio::config 'alarm_inputs')
 COMFORT_OUTPUTS=$(bashio::config 'alarm_outputs')
-COMFORT_RIO_INPUTS=$(bashio::config 'alarm_rio_inputs')
-COMFORT_RIO_OUTPUTS=$(bashio::config 'alarm_rio_outputs')
 COMFORT_RESPONSES=$(bashio::config 'alarm_responses')
 COMFORT_TIME=$(bashio::config 'comfort_time')
 COMFORT_BATTERY_STATUS_ID=$(bashio::config 'comfort_battery_update')
@@ -90,14 +88,6 @@ if [ "${COMFORT_OUTPUTS}" != "null" ]; then
     COMFORT_ARGS="${COMFORT_ARGS} --alarm-outputs ${COMFORT_OUTPUTS}"
 fi
 
-if [ "${COMFORT_RIO_INPUTS}" != "null" ]; then
-    COMFORT_ARGS="${COMFORT_ARGS} --alarm-rio-inputs ${COMFORT_RIO_INPUTS}"
-fi
-
-if [ "${COMFORT_RIO_OUTPUTS}" != "null" ]; then
-    COMFORT_ARGS="${COMFORT_ARGS} --alarm-rio-outputs ${COMFORT_RIO_OUTPUTS}"
-fi
-
 if [ "${COMFORT_RESPONSES}" != "null" ]; then
     COMFORT_ARGS="${COMFORT_ARGS} --alarm-responses ${COMFORT_RESPONSES}"
 fi
@@ -120,4 +110,4 @@ fi
 
 ## Run Comfort2MQTT program
 bashio::log.info "Starting Comfort to MQTT..."
-exec python /comfort2/comfort2.py $COMFORT_ARGS
+exec python /comfort2/bridge.py $COMFORT_ARGS
