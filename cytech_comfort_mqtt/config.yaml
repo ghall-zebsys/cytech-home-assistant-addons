@@ -1,17 +1,24 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.5"
+version: "1.0.6"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
 apparmor: true
+
+ingress: true
+ingress_port: 8099
+panel_title: "Comfort Setup"
 panel_icon: "mdi:alarm-panel-outline"
+
 codenotary: notary@home-assistant.io
 url: "https://github.com/ghall-zebsys/cytech-home-assistant-addons"
 hassio_api: true
 uart: true
+
 devices:
   - /dev/ttyS0:/dev/ttyS0
+
 privileged:
   - SYS_RAWIO
 
@@ -26,7 +33,7 @@ services:
   - mqtt:need
 
 map:
-  - addon_config:ro
+  - addon_config
 
 options:
   device: "/dev/serial0"
