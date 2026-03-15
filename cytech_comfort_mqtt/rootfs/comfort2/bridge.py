@@ -80,6 +80,14 @@ import inspect
 from options import load_options, get_str, get_int, get_bool
 
 
+def is_ipv4_address(address):
+    try:
+        ipaddress.ip_address(address)
+        return True
+    except ValueError:
+        return False
+
+
 def get_ip_address(input_value):
     if is_ipv4_address(input_value):
         return input_value
