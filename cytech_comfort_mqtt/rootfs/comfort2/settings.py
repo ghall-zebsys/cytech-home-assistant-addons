@@ -22,7 +22,10 @@ MAX_ZONES = 96                    # Configurable for future expansion
 MAX_OUTPUTS = 96                  # Configurable for future expansion
 MAX_RESPONSES = 1024              # Configurable for future expansion
 COMFORT_TIMERS = 64               # Default number of timers supported by Comfort II. Max 64.
-
+MAX_FLAGS = 254                   # Configurable for future expansion. Max 254.
+MAX_COUNTERS = 255                # Configurable for future expansion. Max 255.
+MAX_SENSORS = 32                 # Configurable for future expansion. Max 32.
+MAX_TIMERS = 64                  # Configurable for future expansion. Max 64.
 
 BUFFER_SIZE = 4096
 COMFORT_BATTERY_STATUS_ID = 1
@@ -66,6 +69,10 @@ RETRY = timedelta(seconds=10)
 COMFORT_INPUTS = 0
 COMFORT_OUTPUTS = 0
 COMFORT_RESPONSES = 0
+UI_FLAG_COUNT = 0
+UI_COUNTER_COUNT = 0
+UI_TIMER_COUNT = 0
+UI_SENSOR_COUNT = 0
 
 REFRESHTOPIC = DOMAIN+"/alarm/refresh"                  # Use this topic to refresh objects. Not a full Reload but request Update-All from Addon. Use 'key' for auth.
 BATTERYREFRESHTOPIC = DOMAIN+"/alarm/battery_update"    # Used to request Battery and DC Supply voltage updates. To be used by HA Automation for periodic polling.

@@ -140,10 +140,15 @@ settings.COMFORT_BATTERY_STATUS_ID = (
     battery_id if battery_id in [0, 1] + list(range(33, 40)) else 1
 )
 
+
 # Alarm sizing
 settings.COMFORT_INPUTS = get_int(_opts, "alarm_inputs", 8)
 settings.COMFORT_OUTPUTS = get_int(_opts, "alarm_outputs", 0)
 settings.COMFORT_RESPONSES = get_int(_opts, "alarm_responses", 0)
+settings.UI_FLAG_COUNT = get_int(_opts, "flag_count", 8)
+settings.UI_COUNTER_COUNT = get_int(_opts, "counter_count", 8)
+settings.UI_TIMER_COUNT = get_int(_opts, "timer_count", 8)
+settings.UI_SENSOR_COUNT = get_int(_opts, "sensor_count", 8)
 
 if settings.COMFORT_INPUTS < 8:
     settings.COMFORT_INPUTS = 8
@@ -162,6 +167,26 @@ if settings.COMFORT_RESPONSES < 0:
 if settings.COMFORT_RESPONSES > settings.MAX_RESPONSES:
     settings.COMFORT_RESPONSES = settings.MAX_RESPONSES
 ALARMNUMBEROFRESPONSES = settings.COMFORT_RESPONSES
+
+if settings.UI_FLAG_COUNT < 0:
+    settings.UI_FLAG_COUNT = 0
+if settings.UI_FLAG_COUNT > settings.MAX_FLAGS:
+    settings.UI_FLAG_COUNT = settings.MAX_FLAGS
+
+if settings.UI_COUNTER_COUNT < 0:
+    settings.UI_COUNTER_COUNT = 0
+if settings.UI_COUNTER_COUNT > settings.MAX_COUNTERS:
+    settings.UI_COUNTER_COUNT = settings.MAX_COUNTERS
+
+if settings.UI_TIMER_COUNT < 0:
+    settings.UI_TIMER_COUNT = 0
+if settings.UI_TIMER_COUNT > settings.MAX_TIMERS:
+    settings.UI_TIMER_COUNT = settings.MAX_TIMERS
+
+if settings.UI_SENSOR_COUNT < 0:
+    settings.UI_SENSOR_COUNT = 0
+if settings.UI_SENSOR_COUNT > settings.MAX_SENSORS:
+    settings.UI_SENSOR_COUNT = settings.MAX_SENSORS
 
 # Logging
 settings.LOG_VERBOSITY = get_str(_opts, "log_verbosity", "INFO").upper()
@@ -1898,6 +1923,8 @@ class Comfort2(mqtt.Client):
             except ValueError:
                 continue
 
+            if i < 1 or i > settings.UI_FLAG_COUNT:  # Only publish flags that are within the UI-supported range
+                continue
             # logger.info(
             #     "publish_flag_discovery: raw key=%r value=%r type=%s",
             #     key, value, type(value).__name__
@@ -1958,6 +1985,10 @@ class Comfort2(mqtt.Client):
             except ValueError:
                 continue
 
+            if i < 1 or i > settings.UI_COUNTER_COUNT:  # Only publish counters that are within the UI-supported range
+                continue
+
+
             # logger.info(
             #     "publish_counter_discovery: raw key=%r value=%r type=%s",
             #     key, value, type(value).__name__
@@ -2017,6 +2048,9 @@ class Comfort2(mqtt.Client):
             try:
                 i = int(key)
             except ValueError:
+                continue
+
+            if i < 1 or i > settings.UI_SENSOR_COUNT:  # Only publish sensors that are within the UI-supported range
                 continue
 
             # logger.info(
@@ -2082,6 +2116,10 @@ class Comfort2(mqtt.Client):
             except ValueError:
                 logging.warning("publish_timer_discovery: skipping non-integer key=%r", key)
                 continue
+
+            if i < 1 or i > settings.UI_TIMER_COUNT:  # Only publish timers that are within the UI-supported range
+                continue
+
 
             if isinstance(value, dict):
                 timer_name = (value.get("Name") or value.get("name") or f"Timer{i:03d}").strip()

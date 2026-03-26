@@ -78,16 +78,14 @@ configuration:
     name: Comfort Zone Outputs (In multiples of 8).
     description: >-
       Cytech Comfort Zone Outputs installed on your system. Range from 0 - 96 (Default is 0).
-  alarm_rio_inputs:
-    name: Comfort SCS/RIO Inputs
+  flag_count:
+    name: Comfort Flags
     description: >-
-      Cytech Comfort SCS/RIO Inputs installed on your system. Range from 0 - 120 (Default is 0).
-      Note: This is the amount of SCS/RIO Inputs EG. one SCS/RIO can have up to 8 Inputs. 
-  alarm_rio_outputs:
-    name: Comfort SCS/RIO Outputs.
+      The number of Cytech Comfort Flags that are shown in Home Assistant and can range from 0 - 254 (Default is 8).
+  counter_count:
+    name: Comfort Counters
     description: >-
-      Cytech Comfort SCS/RIO Outputs installed on your system. Range from 0 - 120 (Default is 0).
-      Note: This is the amount of additional SCS/RIO Outputs EG. one SCS/RIO can have up to 8 Outputs.
+      The number of Cytech Comfort Counters that are shown in Home Assistant and can range from 0 - 255 (Default is 8).
   alarm_responses:
     name: Comfort Responses
     description: >-
