@@ -397,7 +397,7 @@ class Comfort2(mqtt.Client):
             self.clear_counter_discovery()
             self.clear_sensor_discovery()
             self.clear_timer_discovery()
-            self.ClearBatteryVoltageDiscovery()
+            self.clear_battery_voltage_discovery()
 
             time.sleep(0.25)    # Short wait for MQTT to be ready to accept commands.
 
@@ -987,6 +987,26 @@ class Comfort2(mqtt.Client):
         logger.info("In readcurrentstate connected = %d", self.connected)
         if self.connected == True:
 
+            settings.device_properties['BatteryVoltageMain'] = "-1"
+            settings.device_properties['BatteryVoltageSlave1'] = "-1"
+            settings.device_properties['BatteryVoltageSlave2'] = "-1"
+            settings.device_properties['BatteryVoltageSlave3'] = "-1"
+            settings.device_properties['BatteryVoltageSlave4'] = "-1"
+            settings.device_properties['BatteryVoltageSlave5'] = "-1"
+            settings.device_properties['BatteryVoltageSlave6'] = "-1"
+            settings.device_properties['BatteryVoltageSlave7'] = "-1"
+            settings.device_properties['ChargeVoltageMain'] = "-1"
+            settings.device_properties['ChargeVoltageSlave1'] = "-1"
+            settings.device_properties['ChargeVoltageSlave2'] = "-1"
+            settings.device_properties['ChargeVoltageSlave3'] = "-1"
+            settings.device_properties['ChargeVoltageSlave4'] = "-1"
+            settings.device_properties['ChargeVoltageSlave5'] = "-1"
+            settings.device_properties['ChargeVoltageSlave6'] = "-1"
+            settings.device_properties['ChargeVoltageSlave7'] = "-1"
+            settings.device_properties['ChargerStatus'] = "N/A"
+            settings.device_properties['BatteryStatus'] = "N/A"
+
+
             settings.device_properties['CPUType'] = 'N/A'                  # Reset CPU type to default
 
             #get Bypassed Zones
@@ -1002,6 +1022,11 @@ class Comfort2(mqtt.Client):
             
             #get CPU Type
             self.serial.write("\x03u?01\r".encode())         # Get CPU type for Main board.
+            settings.SAVEDTIME = datetime.now()
+            time.sleep(0.1)
+
+            #get the battery and DC supply status for mainboard and slaves (if ARM or Toshiba CPU)
+            self.serial.write("\x03D?0000\r".encode())       # Mainboard Battery and DC Supply Status
             settings.SAVEDTIME = datetime.now()
             time.sleep(0.1)
                        
@@ -1071,29 +1096,12 @@ class Comfort2(mqtt.Client):
             self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)       # Empty string removes topic.
             time.sleep(0.1)
 
-            settings.device_properties['BatteryVoltageMain'] = "-1"
-            settings.device_properties['BatteryVoltageSlave1'] = "-1"
-            settings.device_properties['BatteryVoltageSlave2'] = "-1"
-            settings.device_properties['BatteryVoltageSlave3'] = "-1"
-            settings.device_properties['BatteryVoltageSlave4'] = "-1"
-            settings.device_properties['BatteryVoltageSlave5'] = "-1"
-            settings.device_properties['BatteryVoltageSlave6'] = "-1"
-            settings.device_properties['BatteryVoltageSlave7'] = "-1"
-            settings.device_properties['ChargeVoltageMain'] = "-1"
-            settings.device_properties['ChargeVoltageSlave1'] = "-1"
-            settings.device_properties['ChargeVoltageSlave2'] = "-1"
-            settings.device_properties['ChargeVoltageSlave3'] = "-1"
-            settings.device_properties['ChargeVoltageSlave4'] = "-1"
-            settings.device_properties['ChargeVoltageSlave5'] = "-1"
-            settings.device_properties['ChargeVoltageSlave6'] = "-1"
-            settings.device_properties['ChargeVoltageSlave7'] = "-1"
-            settings.device_properties['ChargerStatus'] = "N/A"
-            settings.device_properties['BatteryStatus'] = "N/A"
+
 
             if settings.BROKERCONNECTED and settings.COMFORTCONNECTED:
                 self.publish(settings.ALARMCONNECTEDTOPIC, 1,qos=2,retain=True)
                 time.sleep(0.1)
-                self.UpdateBatteryStatus()
+
 
     def UpdateBatteryStatus(self):
 
@@ -1836,7 +1844,7 @@ class Comfort2(mqtt.Client):
             self.clear_counter_discovery()
             self.clear_sensor_discovery()
             self.clear_timer_discovery()
-            self.ClearBatteryVoltageDiscovery()
+            self.clear_battery_voltage_discovery()
 
 
 
@@ -1938,7 +1946,7 @@ class Comfort2(mqtt.Client):
         #logging.info("clear_timer_discovery: END")
 
 
-    def ClearBatteryVoltageDiscovery(self):
+    def clear_battery_voltage_discovery(self):
         """Remove MQTT discovery for battery and DC voltage sensors."""
 
         topics = [
@@ -2356,8 +2364,16 @@ class Comfort2(mqtt.Client):
         }
 
         availability = [
-            {"topic": settings.ALARMAVAILABLETOPIC},
-            {"topic": settings.ALARMCONNECTEDTOPIC}
+            {
+                "topic": settings.ALARMAVAILABLETOPIC,
+                "payload_available": "1",
+                "payload_not_available": "0"
+            },
+            {
+                "topic": settings.ALARMCONNECTEDTOPIC,
+                "payload_available": "1",
+                "payload_not_available": "0"
+            }
         ]
 
         battery_state_topic = settings.DOMAIN + "/alarm/battery_main_voltage"
@@ -2400,6 +2416,7 @@ class Comfort2(mqtt.Client):
         time.sleep(0.1)
 
 
+
     def PublishBatteryVoltageStates(self):
         """Publish main battery and DC supply voltage states as individual MQTT sensor topics."""
         battery_topic = settings.DOMAIN + "/alarm/battery_main_voltage"
@@ -2408,23 +2425,31 @@ class Comfort2(mqtt.Client):
         battery_main = str(settings.device_properties.get("BatteryVoltageMain", "-1"))
         dc_supply_main = str(settings.device_properties.get("ChargeVoltageMain", "-1"))
 
-        logging.debug(
-            "Battery voltage state publish: battery_main=%s dc_supply_main=%s",
+        logging.info(
+            "PublishBatteryVoltageStates: battery_topic=%s battery_main=%s dc_topic=%s dc_supply_main=%s",
+            battery_topic,
             battery_main,
+            dc_topic,
             dc_supply_main
         )
 
         if battery_main != "-1":
             self.publish(battery_topic, battery_main, qos=2, retain=True)
+            logging.info("Published battery voltage state: %s -> %s", battery_topic, battery_main)
         else:
-            self.publish(battery_topic, "", qos=2, retain=True)
+            logging.warning("Skipping battery voltage publish because BatteryVoltageMain = -1")
+
         time.sleep(0.1)
 
         if dc_supply_main != "-1":
             self.publish(dc_topic, dc_supply_main, qos=2, retain=True)
+            logging.info("Published DC supply voltage state: %s -> %s", dc_topic, dc_supply_main)
         else:
-            self.publish(dc_topic, "", qos=2, retain=True)
+            logging.warning("Skipping DC supply voltage publish because ChargeVoltageMain = -1")
+
         time.sleep(0.1)
+
+
 
 
 
