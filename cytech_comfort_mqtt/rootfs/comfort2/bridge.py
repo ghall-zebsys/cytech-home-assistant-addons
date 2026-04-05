@@ -898,59 +898,42 @@ class Comfort2(mqtt.Client):
             self.alarm_log.add(text, level="MSG")
 
    
-    def readlines(self, recv_buffer=settings.BUFFER_SIZE, delim='\r'):
+    def readlines(self, delim=b'\r'):
         """
-        Reads lines from the Comfort serial port. Behaves like the old TCP version:
-        builds a buffer, splits on CR, yields complete lines, and treats empty reads
-        as a timeout we dont send a cc00 keepalive
-       """
+        Read CR-terminated lines from the Comfort serial port.
 
-        buffer = ''
-        data_present = True
+        This is lower latency than read(recv_buffer) because it returns as soon
+        as a full Comfort message ending in CR is received, instead of waiting
+        for a large buffer or a long timeout.
+        """
 
-        while data_present:
+        while True:
             try:
-                # Blocking read with timeout (configured in Serial(..., timeout=TIMEOUT.seconds))
-                raw = self.serial.read(recv_buffer)
+                # Read one complete Comfort message, ending at CR
+                raw = self.serial.read_until(delim)
 
             except serial.SerialException as e:
                 logger.error("Serial read error from Comfort: %s", e)
                 settings.COMFORTCONNECTED = False
                 settings.FIRST_LOGIN = True
-                # Let the outer loop handle reconnect
                 raise
 
-            # === SERIAL TIMEOUT / NO DATA (equivalent to len(data) == 0 in TCP) ===
+            # Serial timeout with no data
             if not raw:
-                # UART: empty read is normal, no keepalive required
                 continue
 
-
-            # === Normal data path ===
             try:
-                data = raw.decode(errors="ignore")
+                line = raw.decode(errors="ignore").strip()
             except Exception:
-                data = ""
-
-            if not data:
-                # Nothing decodable in this chunk, just continue
                 continue
 
-            # Received normal data
-            buffer += data
+            if not line:
+                continue
 
-            while delim in buffer:
-                line, buffer = buffer.split(delim, 1)
-                line = line.strip()
-                if not line:
-                    continue
+            settings.COMFORTCONNECTED = True
+            settings.SAVEDTIME = datetime.now()
 
-                settings.COMFORTCONNECTED = True
-                settings.SAVEDTIME = datetime.now()
-
-                yield line
-
-        return
+            yield line
 
 
 
@@ -982,8 +965,7 @@ class Comfort2(mqtt.Client):
 
 
     def readcurrentstate(self):
-        
-
+ 
         logger.info("In readcurrentstate connected = %d", self.connected)
         if self.connected == True:
 
@@ -1025,12 +1007,39 @@ class Comfort2(mqtt.Client):
             settings.SAVEDTIME = datetime.now()
             time.sleep(0.01)
 
-            #get the battery and DC supply status for mainboard and slaves (if ARM or Toshiba CPU)
+            # Get the battery and DC supply status for main board
             self.serial.write("\x03D?0000\r".encode())       # Mainboard Battery and DC Supply Status
             settings.SAVEDTIME = datetime.now()
             time.sleep(0.01)
-                       
-            # #get HW model
+
+            # Get battery and DC supply status for installed SEM boards
+            try:
+                installed_slaves = int(settings.device_properties.get("sem_id", 0))
+            except Exception:
+                installed_slaves = 0
+
+            installed_slaves = max(0, min(installed_slaves, 7))
+
+            logger.info("Requesting battery/DC voltages for %d installed SEM boards", installed_slaves)
+
+            for sem in range(1, installed_slaves + 1):
+                sem_address_dec = sem + 32          # SEM1=33, SEM2=34 ... SEM7=39
+                sem_address_hex = f"{sem_address_dec:02X}"
+
+                # Battery voltage/status
+                self.serial.write((f"\x03D?{sem_address_hex}01\r").encode())
+                settings.SAVEDTIME = datetime.now()
+                logger.info("Requested SEM %d battery status using D?%s01", sem, sem_address_hex)
+                time.sleep(0.01)
+
+                # DC supply voltage/status
+                self.serial.write((f"\x03D?{sem_address_hex}02\r").encode())
+                settings.SAVEDTIME = datetime.now()
+                logger.info("Requested SEM %d DC supply status using D?%s02", sem, sem_address_hex)
+                time.sleep(0.01)
+
+                      
+            #get HW model
             self.serial.write("\x03EL\r".encode())
             settings.SAVEDTIME = datetime.now()
             time.sleep(0.01)
@@ -1104,8 +1113,6 @@ class Comfort2(mqtt.Client):
 
 
     def UpdateBatteryStatus(self):
-
-
 
         discoverytopic = settings.DOMAIN + "/alarm/battery_status"
         MQTT_MSG=json.dumps({"BatteryStatus": str(settings.device_properties['BatteryStatus']),
@@ -1867,6 +1874,7 @@ class Comfort2(mqtt.Client):
                 self.publish_sensor_discovery(mqtt_device_comfort)
                 self.publish_timer_discovery(mqtt_device_comfort)
                 self.PublishBatteryVoltageDiscovery()
+                self.PublishBatteryVoltageStates()
             else:
                 logger.warning("MQTT_DEVICE_COMFORT not set yet; skipping discovery publish on reload")
 
@@ -1946,18 +1954,24 @@ class Comfort2(mqtt.Client):
         #logging.info("clear_timer_discovery: END")
 
 
+
     def clear_battery_voltage_discovery(self):
-        """Remove MQTT discovery for battery and DC voltage sensors."""
+        """Remove MQTT discovery for battery and DC voltage sensors for main board and all SEM boards."""
 
         topics = [
             f"homeassistant/sensor/{settings.DOMAIN}/battery_main_voltage/config",
-            f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_main_voltage/config"
+            f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_main_voltage/config",
         ]
 
+        for sem in range(1, 8):
+            topics.append(f"homeassistant/sensor/{settings.DOMAIN}/battery_slave{sem}_voltage/config")
+            topics.append(f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_slave{sem}_voltage/config")
+
         for topic in topics:
-            logging.info("Clearing discovery topic: %s", topic)
+            logger.info("Clearing battery discovery topic: %s", topic)
             self.publish(topic, "", qos=2, retain=True)
-            time.sleep(0.1)
+            time.sleep(0.02)
+
 
 
 
@@ -2355,13 +2369,10 @@ class Comfort2(mqtt.Client):
 
 
     def PublishBatteryVoltageDiscovery(self):
-        """Publish MQTT discovery for main battery and DC supply voltage sensors."""
-        device_block = {
-            "identifiers": [settings.DOMAIN],
-            "name": settings.ALARMNAME if hasattr(settings, "ALARMNAME") else "Comfort II ULTRA",
-            "manufacturer": "Cytech",
-            "model": "Comfort"
-        }
+        """Publish MQTT discovery for main battery/DC voltage sensors and installed SEM boards only.
+        Also clears retained discovery topics for SEM boards that are no longer installed.
+        """
+        device_block = self.MQTT_DEVICE_COMFORT
 
         availability = [
             {
@@ -2376,93 +2387,298 @@ class Comfort2(mqtt.Client):
             }
         ]
 
-        battery_state_topic = settings.DOMAIN + "/alarm/battery_main_voltage"
-        dc_state_topic = settings.DOMAIN + "/alarm/dc_supply_main_voltage"
+        try:
+            installed_slaves = int(settings.device_properties.get("sem_id", 0))
+        except Exception:
+            installed_slaves = 0
 
-        battery_discovery_topic = "homeassistant/sensor/{}/battery_main_voltage/config".format(settings.DOMAIN)
-        dc_discovery_topic = "homeassistant/sensor/{}/dc_supply_main_voltage/config".format(settings.DOMAIN)
+        # Clamp to valid SEM range
+        installed_slaves = max(0, min(installed_slaves, 7))
 
-        battery_payload = {
-            "name": "Battery Main Voltage",
-            "unique_id": "{}_battery_main_voltage".format(settings.DOMAIN),
-            "object_id": "{}_battery_main_voltage".format(settings.DOMAIN),
-            "state_topic": battery_state_topic,
-            "unit_of_measurement": "V",
-            "device_class": "voltage",
-            "state_class": "measurement",
-            "suggested_display_precision": 2,
-            "icon": "mdi:car-battery",
-            "availability": availability,
-            "availability_mode": "all",
-            "device": device_block
-        }
+        logger.info("Publishing battery voltage discovery for main board and %d installed SEM boards", installed_slaves)
 
-        dc_payload = {
-            "name": "DC Supply Main Voltage",
-            "unique_id": "{}_dc_supply_main_voltage".format(settings.DOMAIN),
-            "object_id": "{}_dc_supply_main_voltage".format(settings.DOMAIN),
-            "state_topic": dc_state_topic,
-            "unit_of_measurement": "V",
-            "device_class": "voltage",
-            "state_class": "measurement",
-            "suggested_display_precision": 2,
-            "icon": "mdi:flash",
-            "availability": availability,
-            "availability_mode": "all",
-            "device": device_block
-        }
+        # Clear retained discovery for SEM boards above the installed count
+        for sem in range(installed_slaves + 1, 8):
+            battery_discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/battery_slave{sem}_voltage/config"
+            dc_discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/dc_supply_slave{sem}_voltage/config"
 
-        self.publish(battery_discovery_topic, json.dumps(battery_payload), qos=2, retain=True)
-        time.sleep(0.1)
-        self.publish(dc_discovery_topic, json.dumps(dc_payload), qos=2, retain=True)
-        time.sleep(0.1)
+            self.publish(battery_discovery_topic, "", qos=2, retain=True)
+            logger.info("Cleared retained battery discovery topic: %s", battery_discovery_topic)
+            time.sleep(0.02)
 
+            self.publish(dc_discovery_topic, "", qos=2, retain=True)
+            logger.info("Cleared retained DC supply discovery topic: %s", dc_discovery_topic)
+            time.sleep(0.02)
+
+        sensors = [
+            {
+                "suffix": "battery_main_voltage",
+                "name": "Battery Main Voltage",
+                "icon": "mdi:car-battery"
+            },
+            {
+                "suffix": "dc_supply_main_voltage",
+                "name": "DC Supply Main Voltage",
+                "icon": "mdi:flash"
+            }
+        ]
+
+        # Add installed SEM board sensors only
+        for sem in range(1, installed_slaves + 1):
+            sensors.append({
+                "suffix": f"battery_slave{sem}_voltage",
+                "name": f"Battery SEM {sem} Voltage",
+                "icon": "mdi:car-battery"
+            })
+            sensors.append({
+                "suffix": f"dc_supply_slave{sem}_voltage",
+                "name": f"DC Supply SEM {sem} Voltage",
+                "icon": "mdi:flash"
+            })
+
+        for sensor in sensors:
+            state_topic = f"{settings.DOMAIN}/alarm/{sensor['suffix']}"
+            discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/{sensor['suffix']}/config"
+
+            payload = {
+                "name": sensor["name"],
+                "unique_id": f"{settings.DOMAIN}_{sensor['suffix']}",
+                "object_id": f"{settings.DOMAIN}_{sensor['suffix']}",
+                "state_topic": state_topic,
+                "unit_of_measurement": "V",
+                "device_class": "voltage",
+                "state_class": "measurement",
+                "suggested_display_precision": 2,
+                "icon": sensor["icon"],
+                "availability": availability,
+                "availability_mode": "all",
+                "device": device_block
+            }
+
+            self.publish(discovery_topic, json.dumps(payload), qos=2, retain=True)
+            logger.info("Published battery voltage discovery: %s", discovery_topic)
+            time.sleep(0.05)
+            """Publish MQTT discovery for main battery/DC voltage sensors and installed SEM boards only."""
+            device_block = {
+                "identifiers": [settings.DOMAIN],
+                "name": settings.ALARMNAME if hasattr(settings, "ALARMNAME") else "Comfort II ULTRA",
+                "manufacturer": "Cytech",
+                "model": "Comfort"
+            }
+
+            availability = [
+                {
+                    "topic": settings.ALARMAVAILABLETOPIC,
+                    "payload_available": "1",
+                    "payload_not_available": "0"
+                },
+                {
+                    "topic": settings.ALARMCONNECTEDTOPIC,
+                    "payload_available": "1",
+                    "payload_not_available": "0"
+                }
+            ]
+
+            try:
+                installed_slaves = int(settings.device_properties.get("sem_id", 0))
+            except Exception:
+                installed_slaves = 0
+
+            # clamp to valid SEM range
+            installed_slaves = max(0, min(installed_slaves, 7))
+
+            sensors = [
+                {
+                    "suffix": "battery_main_voltage",
+                    "name": "Battery Main Voltage",
+                    "icon": "mdi:car-battery"
+                },
+                {
+                    "suffix": "dc_supply_main_voltage",
+                    "name": "DC Supply Main Voltage",
+                    "icon": "mdi:flash"
+                }
+            ]
+
+            for sem in range(1, installed_slaves + 1):
+                sensors.append({
+                    "suffix": f"battery_slave{sem}_voltage",
+                    "name": f"Battery SEM {sem} Voltage",
+                    "icon": "mdi:car-battery"
+                })
+                sensors.append({
+                    "suffix": f"dc_supply_slave{sem}_voltage",
+                    "name": f"DC Supply SEM {sem} Voltage",
+                    "icon": "mdi:flash"
+                })
+
+            for sensor in sensors:
+                state_topic = f"{settings.DOMAIN}/alarm/{sensor['suffix']}"
+                discovery_topic = f"homeassistant/sensor/{settings.DOMAIN}/{sensor['suffix']}/config"
+
+                payload = {
+                    "name": sensor["name"],
+                    "unique_id": f"{settings.DOMAIN}_{sensor['suffix']}",
+                    "object_id": f"{settings.DOMAIN}_{sensor['suffix']}",
+                    "state_topic": state_topic,
+                    "unit_of_measurement": "V",
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "suggested_display_precision": 2,
+                    "icon": sensor["icon"],
+                    "availability": availability,
+                    "availability_mode": "all",
+                    "device": device_block
+                }
+
+                self.publish(discovery_topic, json.dumps(payload), qos=2, retain=True)
+                time.sleep(0.05)
 
 
     def PublishBatteryVoltageStates(self):
-        """Publish main battery and DC supply voltage states as individual MQTT sensor topics."""
-        battery_topic = settings.DOMAIN + "/alarm/battery_main_voltage"
-        dc_topic = settings.DOMAIN + "/alarm/dc_supply_main_voltage"
-
-        raw_battery = settings.device_properties.get("BatteryVoltageMain", "-1")
-        raw_dc = settings.device_properties.get("ChargeVoltageMain", "-1")
-
+        """Publish main battery/DC voltages and installed SEM board voltages.
+        Also clears retained state topics for SEM boards that are no longer installed.
+        """
         try:
-            battery_main = f"{float(raw_battery):.2f}"
-        except:
-            battery_main = "-1"
+            installed_slaves = int(settings.device_properties.get("sem_id", 0))
+        except Exception:
+            installed_slaves = 0
 
-        try:
-            dc_supply_main = f"{float(raw_dc):.2f}"
-        except:
-            dc_supply_main = "-1"
+        # Clamp to valid SEM range
+        installed_slaves = max(0, min(installed_slaves, 7))
 
-
-        logging.info(
-            "PublishBatteryVoltageStates: battery_topic=%s battery_main=%s dc_topic=%s dc_supply_main=%s",
-            battery_topic,
-            battery_main,
-            dc_topic,
-            dc_supply_main
+        logger.info(
+            "Publishing battery voltage states for main board and %d installed SEM boards",
+            installed_slaves
         )
 
-        if battery_main != "-1":
-            self.publish(battery_topic, battery_main, qos=2, retain=True)
-            logging.info("Published battery voltage state: %s -> %s", battery_topic, battery_main)
-        else:
-            logging.warning("Skipping battery voltage publish because BatteryVoltageMain = -1")
+        def publish_voltage(topic, raw_value, label):
+            try:
+                value = f"{float(raw_value):.2f}"
+            except Exception:
+                value = "-1"
 
-        time.sleep(0.1)
+            logger.info(
+                "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
+                topic,
+                label,
+                value,
+                raw_value
+            )
 
-        if dc_supply_main != "-1":
-            self.publish(dc_topic, dc_supply_main, qos=2, retain=True)
-            logging.info("Published DC supply voltage state: %s -> %s", dc_topic, dc_supply_main)
-        else:
-            logging.warning("Skipping DC supply voltage publish because ChargeVoltageMain = -1")
+            if value != "-1":
+                self.publish(topic, value, qos=2, retain=True)
+                logger.info("Published %s: %s -> %s", label, topic, value)
+            else:
+                logger.warning("Skipping %s publish because raw value = %r", label, raw_value)
 
-        time.sleep(0.1)
+        # --------------------------------------------------
+        # 1. CLEAR OLD SEM STATE TOPICS
+        # --------------------------------------------------
+        for sem in range(installed_slaves + 1, 8):
+            battery_topic = f"{settings.DOMAIN}/alarm/battery_slave{sem}_voltage"
+            dc_topic = f"{settings.DOMAIN}/alarm/dc_supply_slave{sem}_voltage"
 
+            self.publish(battery_topic, "", qos=2, retain=True)
+            logger.info("Cleared retained battery state topic: %s", battery_topic)
+            time.sleep(0.02)
 
+            self.publish(dc_topic, "", qos=2, retain=True)
+            logger.info("Cleared retained DC supply state topic: %s", dc_topic)
+            time.sleep(0.02)
+
+        # --------------------------------------------------
+        # 2. PUBLISH MAIN BOARD
+        # --------------------------------------------------
+        publish_voltage(
+            f"{settings.DOMAIN}/alarm/battery_main_voltage",
+            settings.device_properties.get("BatteryVoltageMain", "-1"),
+            "Battery Main Voltage"
+        )
+        time.sleep(0.05)
+
+        publish_voltage(
+            f"{settings.DOMAIN}/alarm/dc_supply_main_voltage",
+            settings.device_properties.get("ChargeVoltageMain", "-1"),
+            "DC Supply Main Voltage"
+        )
+        time.sleep(0.05)
+
+        # --------------------------------------------------
+        # 3. PUBLISH INSTALLED SEM BOARDS
+        # --------------------------------------------------
+        for sem in range(1, installed_slaves + 1):
+            publish_voltage(
+                f"{settings.DOMAIN}/alarm/battery_slave{sem}_voltage",
+                settings.device_properties.get(f"BatteryVoltageSlave{sem}", "-1"),
+                f"Battery SEM {sem} Voltage"
+            )
+            time.sleep(0.05)
+
+            publish_voltage(
+                f"{settings.DOMAIN}/alarm/dc_supply_slave{sem}_voltage",
+                settings.device_properties.get(f"ChargeVoltageSlave{sem}", "-1"),
+                f"DC Supply SEM {sem} Voltage"
+            )
+            time.sleep(0.05)
+            """Publish main battery/DC voltages and installed SEM board voltages as individual MQTT topics."""
+            try:
+                installed_slaves = int(settings.device_properties.get("sem_id", 0))
+            except Exception:
+                installed_slaves = 0
+
+            installed_slaves = max(0, min(installed_slaves, 7))
+
+            def publish_voltage(topic, raw_value, label):
+                try:
+                    value = f"{float(raw_value):.2f}"
+                except Exception:
+                    value = "-1"
+
+                logging.info(
+                    "PublishBatteryVoltageStates: topic=%s label=%s value=%s raw=%s",
+                    topic,
+                    label,
+                    value,
+                    raw_value
+                )
+
+                if value != "-1":
+                    self.publish(topic, value, qos=2, retain=True)
+                    logging.info("Published %s: %s -> %s", label, topic, value)
+                else:
+                    logging.warning("Skipping %s publish because raw value = %r", label, raw_value)
+
+            # Main board
+            publish_voltage(
+                f"{settings.DOMAIN}/alarm/battery_main_voltage",
+                settings.device_properties.get("BatteryVoltageMain", "-1"),
+                "Battery Main Voltage"
+            )
+            time.sleep(0.05)
+
+            publish_voltage(
+                f"{settings.DOMAIN}/alarm/dc_supply_main_voltage",
+                settings.device_properties.get("ChargeVoltageMain", "-1"),
+                "DC Supply Main Voltage"
+            )
+            time.sleep(0.05)
+
+            # Installed SEM boards only
+            for sem in range(1, installed_slaves + 1):
+                publish_voltage(
+                    f"{settings.DOMAIN}/alarm/battery_slave{sem}_voltage",
+                    settings.device_properties.get(f"BatteryVoltageSlave{sem}", "-1"),
+                    f"Battery SEM {sem} Voltage"
+                )
+                time.sleep(0.05)
+
+                publish_voltage(
+                    f"{settings.DOMAIN}/alarm/dc_supply_slave{sem}_voltage",
+                    settings.device_properties.get(f"ChargeVoltageSlave{sem}", "-1"),
+                    f"DC Supply SEM {sem} Voltage"
+                )
+                time.sleep(0.05)
 
 
 
@@ -2509,7 +2725,7 @@ class Comfort2(mqtt.Client):
                 self.serial = None # Added 17/11/2025
                 try:
                     logger.info("Opening Comfort serial port %s @ %d baud", "/dev/serial0", 115200)
-                    self.serial = LoggedSerial(port='/dev/serial0', baudrate=115200, timeout=settings.TIMEOUT.seconds)
+                    self.serial = LoggedSerial(port='/dev/serial0', baudrate=115200, timeout=0.2)
 
                     #self.serial.write(b"DEBUG: Comfort addon started\r\n")
                     #self.serial.flush()
