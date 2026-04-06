@@ -2739,6 +2739,7 @@ class Comfort2(mqtt.Client):
 
             self.handle_serial_line(line)
 
+
     def handle_serial_line(self, line):
         # --- LOGIN ---
         if line[1:3] == "LU":
@@ -2752,6 +2753,7 @@ class Comfort2(mqtt.Client):
                     logger.info("Waiting for MQTT Broker to come Online...")
 
                 self.connected = True
+                settings.COMFORTCONNECTED = True
 
                 self.publish(settings.ALARMCOMMANDTOPIC, "comm test", qos=2, retain=True)
                 time.sleep(0.01)
@@ -2783,121 +2785,377 @@ class Comfort2(mqtt.Client):
         # --- INPUTS ---
         elif line[1:3] == "IP" and settings.CacheState:
             ipMsg = ComfortIPInputActivationReport(line[1:])
-            settings.ZoneCache[ipMsg.input] = ipMsg.state
 
-            if 1 <= ipMsg.input <= int(settings.COMFORT_INPUTS):
-                self.publish(settings.ALARMINPUTTOPIC % ipMsg.input, str(int(ipMsg.state)), qos=2, retain=True)
+            if ipMsg.state < 2:
+                try:
+                    _name = settings.input_properties[str(ipMsg.input)]['Name'] if settings.ZONEMAPFILE else f"Zone{ipMsg.input:02d}"
+                except KeyError:
+                    _name = f"Zone{ipMsg.input}"
+
+                try:
+                    _zoneword = settings.input_properties[str(ipMsg.input)]['ZoneWord'] if settings.ZONEMAPFILE else ""
+                except KeyError:
+                    _zoneword = ""
+
+                settings.ZoneCache[ipMsg.input] = ipMsg.state
+
+                if 1 <= ipMsg.input <= int(settings.COMFORT_INPUTS):
+                    self.publish(
+                        settings.ALARMINPUTTOPIC % ipMsg.input,
+                        str(int(ipMsg.state)),
+                        qos=2,
+                        retain=True
+                    )
+                    time.sleep(0.01)
+
+                log_msg = json.dumps({
+                    "Time": datetime.now().replace(microsecond=0).isoformat(),
+                    "Type": "input",
+                    "Id": ipMsg.input,
+                    "Name": _name,
+                    "ZoneWord": _zoneword,
+                    "State": int(ipMsg.state),
+                    "Bypass": settings.BypassCache[ipMsg.input]
+                })
+                self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
 
         # --- COUNTERS ---
         elif line[1:3] == "CT" and settings.CacheState:
             ipMsgCT = ComfortCTCounterActivationReport(line[1:])
-            self.publish(settings.ALARMCOUNTERTOPIC % ipMsgCT.counter, str(ipMsgCT.value), qos=2, retain=True)
+
+            self.publish(
+                settings.ALARMCOUNTERTOPIC % ipMsgCT.counter,
+                str(ipMsgCT.value),
+                qos=2,
+                retain=True
+            )
+            time.sleep(0.01)
 
         # --- SENSOR REQUEST RESPONSE ---
         elif line[1:3] == "s?":
-            msg = Comfort_RSensorActivationReport(line[1:])
-            self.publish(settings.ALARMSENSORTOPIC % msg.sensor, str(msg.value), qos=2, retain=True)
+            ipMsgSQ = Comfort_RSensorActivationReport(line[1:])
+            sensor_id = ipMsgSQ.sensor
+            value = ipMsgSQ.value
+            topic = settings.ALARMSENSORTOPIC % sensor_id
+
+            self.publish(topic, str(value), qos=2, retain=True)
 
         # --- SENSOR REPORT ---
         elif line[1:3] == "sr" and settings.CacheState:
-            msg = Comfort_RSensorActivationReport(line[1:])
-            self.publish(settings.ALARMSENSORTOPIC % msg.sensor, str(msg.value), qos=2, retain=True)
+            ipMsgSR = Comfort_RSensorActivationReport(line[1:])
+            sensor_id = ipMsgSR.sensor
+            value = ipMsgSR.value
+            topic = settings.ALARMSENSORTOPIC % sensor_id
+
+            self.publish(topic, str(value), qos=2, retain=True)
 
         # --- TIMER ---
         elif line[1:3] == "TR":
-            msg = ComfortTRReport(line[1:])
-            self.publish(settings.COMFORTTIMERSTOPIC % msg.timer, str(msg.value), qos=2, retain=True)
+            ipMsgTR = ComfortTRReport(line[1:])
+            timer_id = ipMsgTR.timer
+            value = ipMsgTR.value
+            state = ipMsgTR.state
+            topic = settings.COMFORTTIMERSTOPIC % timer_id
+
+            self.publish(topic, str(value), qos=2, retain=True)
+
+            log_msg = json.dumps({
+                "Time": datetime.now().replace(microsecond=0).isoformat(),
+                "Type": "timer",
+                "Id": timer_id,
+                "Value": value,
+                "State": state
+            })
+            self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
+            time.sleep(0.01)
 
         # --- LOGIN REPORT ---
         elif line[1:3] == "LR":
-            msg = ComfortLUUserLoggedIn(line[1:])
-            if msg.user != 0:
-                txt = f"Comfort {msg.method} Login - {f'User {msg.user}' if msg.user != 254 else 'Engineer'}"
-                self.publish_alarm_message(txt, retain=False)
+            luMsg = ComfortLUUserLoggedIn(line[1:])
+            if luMsg.user != 0:
+                message_topic = f"Comfort {luMsg.method} Login - {f'User {luMsg.user}' if luMsg.user != 254 else 'Engineer'}"
+                self.publish_alarm_message(message_topic, retain=False)
 
         # --- BULK ZONES ---
         elif line[1:3] == "Z?":
             zMsg = ComfortZ_ReportAllZones(line[1:])
-            for z in zMsg.inputs:
-                settings.ZoneCache[z.input] = z.state
-                if 1 <= z.input <= int(settings.COMFORT_INPUTS):
-                    self.publish(settings.ALARMINPUTTOPIC % z.input, str(int(z.state)), qos=2, retain=True)
+
+            for ipMsgZ in zMsg.inputs:
+                settings.ZoneCache[ipMsgZ.input] = ipMsgZ.state
+
+                if 1 <= ipMsgZ.input <= int(settings.COMFORT_INPUTS):
+                    self.publish(
+                        settings.ALARMINPUTTOPIC % ipMsgZ.input,
+                        str(int(ipMsgZ.state)),
+                        qos=2,
+                        retain=True
+                    )
+                    time.sleep(0.01)
+
+        # --- MODE ---
+        elif line[1:3] == "M?" or line[1:3] == "MD":
+            mMsg = ComfortM_SecurityModeReport(line[1:])
+            self.publish(settings.ALARMSTATETOPIC, mMsg.modename, qos=2, retain=True)
+            self.publish(settings.ALARMMODETOPIC, mMsg.mode, qos=2, retain=True)
+            self.entryexitdelay = 0
+            if hasattr(self, "alarm_log"):
+                self.alarm_log.add(f"MODE -> {mMsg.modename} ({mMsg.mode})", level="STATE")
+
+        # --- STATUS ---
+        elif line[1:3] == "S?":
+            SMsg = ComfortS_SecurityModeReport(line[1:])
+            self.publish(settings.ALARMSTATETOPIC, SMsg.modename, qos=2, retain=True)
+            if hasattr(self, "alarm_log"):
+                self.alarm_log.add(f"STATUS -> {SMsg.modename}", level="STATE")
+
+        # --- SYSTEM INFO / DISCOVERY ---
+        elif line[1:3] == "V?":
+            VMsg = ComfortV_SystemTypeReport(line[1:])
+
+            settings.device_properties['ComfortFileSystem'] = str(VMsg.filesystem)
+            settings.device_properties['ComfortFirmwareType'] = str(VMsg.firmware)
+            settings.device_properties['Version'] = str(VMsg.version) + "." + str(VMsg.revision).zfill(3)
+
+            self.UpdateDeviceInfo(True)
+
+            current_firmware = float(str(VMsg.version) + "." + str(VMsg.revision).zfill(3))
+            if current_firmware >= settings.SupportedFirmware:
+                logging.info(
+                    "%s detected (Supported Firmware %d.%03d)",
+                    settings.models[int(settings.device_properties['ComfortFileSystem'])]
+                    if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown device",
+                    VMsg.version,
+                    VMsg.revision
+                )
+            else:
+                logging.error(
+                    "%s detected (Unsupported Firmware %d.%03d)",
+                    settings.models[int(settings.device_properties['ComfortFileSystem'])]
+                    if int(settings.device_properties['ComfortFileSystem']) in settings.models else "Unknown device",
+                    VMsg.version,
+                    VMsg.revision
+                )
+
+        elif line[1:5] == "u?01":
+            uMsg = Comfort_U_SystemCPUTypeReport(line[1:])
+
+            settings.device_properties['CPUType'] = str(uMsg.cputype)
+            if str(uMsg.cputype) == "N/A":
+                settings.device_properties['BatteryVoltageMain'] = "-1"
+                settings.device_properties['BatteryVoltageSlave1'] = "-1"
+                settings.device_properties['BatteryVoltageSlave2'] = "-1"
+                settings.device_properties['BatteryVoltageSlave3'] = "-1"
+                settings.device_properties['BatteryVoltageSlave4'] = "-1"
+                settings.device_properties['BatteryVoltageSlave5'] = "-1"
+                settings.device_properties['BatteryVoltageSlave6'] = "-1"
+                settings.device_properties['BatteryVoltageSlave7'] = "-1"
+                settings.device_properties['ChargeVoltageMain'] = "-1"
+                settings.device_properties['ChargeVoltageSlave1'] = "-1"
+                settings.device_properties['ChargeVoltageSlave2'] = "-1"
+                settings.device_properties['ChargeVoltageSlave3'] = "-1"
+                settings.device_properties['ChargeVoltageSlave4'] = "-1"
+                settings.device_properties['ChargeVoltageSlave5'] = "-1"
+                settings.device_properties['ChargeVoltageSlave6'] = "-1"
+                settings.device_properties['ChargeVoltageSlave7'] = "-1"
+                settings.device_properties['ChargerStatus'] = "N/A"
+                settings.device_properties['BatteryStatus'] = "N/A"
+
+            self.UpdateDeviceInfo(True)
+
+        elif line[1:3] == "EL":
+            ELMsg = Comfort_EL_HardwareModelReport(line[1:])
+            settings.device_properties['ComfortHardwareModel'] = str(ELMsg.hardwaremodel)
+            self.UpdateDeviceInfo(True)
+
+        elif line[1:3] == "D?":
+            Comfort_D_SystemVoltageReport(line[1:])
+            logger.info(
+                "After parse: BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
+                settings.device_properties.get("BatteryVoltageMain"),
+                settings.device_properties.get("ChargeVoltageMain"),
+                settings.device_properties.get("BatteryStatus"),
+                settings.device_properties.get("ChargerStatus"),
+            )
+            self.UpdateBatteryStatus()
+
+        elif line[1:5] == "SN01":
+            SNMsg = ComfortSN_SerialNumberReport(line[1:])
+            if settings.COMFORT_SERIAL != SNMsg.serial_number:
+                pass
+            settings.COMFORT_KEY = SNMsg.refreshkey
+            logging.info("Refresh Key: %s", settings.COMFORT_KEY)
+            logging.info("Serial Number: %s", settings.COMFORT_SERIAL)
+            settings.device_properties['SerialNumber'] = settings.COMFORT_SERIAL
+            self.UpdateDeviceInfo(True)
+
+        elif line[1:3] == "a?":
+            aMsg = Comfort_A_SecurityInformationReport(line[1:])
+            self.publish(settings.ALARMSTATUSTOPIC, aMsg.state, qos=2, retain=True)
+            if aMsg.type == 'LowBattery':
+                logging.warning("Low Battery - %s", aMsg.battery)
+            elif aMsg.type == 'PowerFail':
+                logging.warning("AC Fail")
+            elif aMsg.type == 'Disarm':
+                logging.info("System Disarmed")
+
+        # --- ARM READY / NOT READY ---
+        elif line[1:3] == "ER" and settings.CacheState:
+            erMsg = ComfortERArmReadyNotReady(line[1:])
+            if erMsg.zone != 0:
+                zone = str(erMsg.zone)
+
+                if settings.ZONEMAPFILE and self.CheckIndexNumberFormat(zone):
+                    zone_name = settings.input_properties.get(zone, {}).get("Name", "Unknown zone")
+                    message_topic = f"Zone {zone} ({zone_name}) Not Ready"
+                else:
+                    message_topic = f"Zone {zone} Not Ready"
+
+                self.publish_alarm_message(message_topic, retain=True)
+            else:
+                logging.info("Ready To Arm...")
+
+        # --- ALARM ---
+        elif line[1:3] == "AM":
+            amMsg = ComfortAMSystemAlarmReport(line[1:])
+            self.publish_alarm_message(amMsg.message, retain=True)
+            if amMsg.triggered:
+                self.publish(settings.ALARMSTATETOPIC, "triggered", qos=2, retain=False)
+                self.publish_alarm_message("triggered", retain=False)
+
+        elif line[1:3] == "AR":
+            arMsg = ComfortARSystemAlarmReport(line[1:])
+            self.publish_alarm_message(arMsg.message, retain=True)
+
+        # --- ENTRY/EXIT ---
+        elif line[1:3] == "EX":
+            exMsg = ComfortEXEntryExitDelayStarted(line[1:])
+            self.entryexitdelay = exMsg.delay
+            self.entryexit_timer()
+            if exMsg.type == 1:
+                self.publish(settings.ALARMSTATETOPIC, "pending", qos=2, retain=False)
+            elif exMsg.type == 2:
+                self.publish(settings.ALARMSTATETOPIC, "arming", qos=2, retain=False)
+
+        # --- PHONE / DOORBELL ---
+        elif line[1:3] == "RP":
+            result = self.validate_hex_in_list(line[3:5], "0,1,255")
+            if result and line[3:5] == "01":
+                self.publish_alarm_message("Phone Ring", retain=True)
+            elif result and line[3:5] == "00":
+                self.publish_alarm_message("", retain=True)
+            elif result and line[3:5] == "FF":
+                self.publish_alarm_message("Phone Answer", retain=True)
+
+        elif line[1:3] == "DB":
+            result = self.validate_hex_in_list(line[3:5], "49-51,255")
+            if result and line[3:5] == "FF":
+                self.publish_alarm_message("", retain=True)
+                self.publish_alarm_message(0, retain=True)
+            elif result:
+                self.publish_alarm_message(1, retain=True)
+                message_topic = "Doorbell " + str(int(line[3:5], 16) - 48)
+                self.publish_alarm_message(message_topic, retain=True)
+
+        # --- OUTPUT CHANGE ---
+        elif line[1:3] == "OP" and settings.CacheState:
+            opMsg = ComfortOPOutputActivationReport(line[1:])
+            if opMsg.state < 2:
+                if 1 <= opMsg.output <= int(settings.COMFORT_OUTPUTS):
+                    self.publish(
+                        settings.ALARMOUTPUTTOPIC % opMsg.output,
+                        str(int(opMsg.state)),
+                        qos=2,
+                        retain=True
+                    )
+                    time.sleep(0.01)
 
         # --- BULK OUTPUTS ---
         elif line[1:3] == "Y?":
             yMsg = ComfortY_ReportAllOutputs(line[1:])
-            for o in yMsg.outputs:
-                if 1 <= o.output <= int(settings.COMFORT_OUTPUTS):
-                    self.publish(settings.ALARMOUTPUTTOPIC % o.output, str(int(o.state)), qos=2, retain=True)
-
-        # --- MODE ---
-        elif line[1:3] in ("M?", "MD"):
-            msg = ComfortM_SecurityModeReport(line[1:])
-            self.publish(settings.ALARMSTATETOPIC, msg.modename, qos=2, retain=True)
-            self.publish(settings.ALARMMODETOPIC, msg.mode, qos=2, retain=True)
-
-        # --- STATUS ---
-        elif line[1:3] == "S?":
-            msg = ComfortS_SecurityModeReport(line[1:])
-            self.publish(settings.ALARMSTATETOPIC, msg.modename, qos=2, retain=True)
-
-        # --- OUTPUT CHANGE ---
-        elif line[1:3] == "OP" and settings.CacheState:
-            msg = ComfortOPOutputActivationReport(line[1:])
-            self.publish(settings.ALARMOUTPUTTOPIC % msg.output, str(int(msg.state)), qos=2, retain=True)
-
-        # --- FLAGS ---
-        elif line[1:3] == "FL" and settings.CacheState:
-            msg = ComfortFLFlagActivationReport(line[1:])
-            payload = "1" if int(msg.state) else "0"
-            self.publish(settings.ALARMFLAGTOPIC % msg.flag, payload, qos=2, retain=True)
-
-        # --- BULK FLAGS ---
-        elif line[1:3] == "f?" and len(line) == 69:
-            msg = Comfortf_ReportAllFlags(line[1:])
-            for f in msg.flags:
-                payload = "1" if int(f.state) else "0"
-                self.publish(settings.ALARMFLAGTOPIC % f.flag, payload, qos=2, retain=True)
+            for opMsgY in yMsg.outputs:
+                if 1 <= opMsgY.output <= int(settings.COMFORT_OUTPUTS):
+                    self.publish(
+                        settings.ALARMOUTPUTTOPIC % opMsgY.output,
+                        str(int(opMsgY.state)),
+                        qos=2,
+                        retain=True
+                    )
+                    time.sleep(0.01)
 
         # --- COUNTER BULK ---
         elif line[1:5] == "r?00":
-            msg = Comfort_R_ReportAllSensors(line[1:])
-            for c in msg.counters:
-                self.publish(settings.ALARMCOUNTERTOPIC % c.counter, str(c.value), qos=2, retain=True)
+            cMsg = Comfort_R_ReportAllSensors(line[1:])
+            for cMsgr in cMsg.counters:
+                self.publish(
+                    settings.ALARMCOUNTERTOPIC % cMsgr.counter,
+                    str(cMsgr.value),
+                    qos=2,
+                    retain=True
+                )
+                time.sleep(0.01)
 
         # --- SENSOR BULK ---
         elif line[1:5] == "r?01":
-            msg = Comfort_R_ReportAllSensors(line[1:])
-            for s in msg.sensors:
-                self.publish(settings.ALARMSENSORTOPIC % s.sensor, str(s.value), qos=2, retain=True)
+            sMsg = Comfort_R_ReportAllSensors(line[1:])
+            for sMsgr in sMsg.sensors:
+                self.publish(
+                    settings.ALARMSENSORTOPIC % sMsgr.sensor,
+                    str(sMsgr.value),
+                    qos=2,
+                    retain=True
+                )
+                time.sleep(0.01)
+
+        # --- BULK FLAGS ---
+        elif (line[1:3] == "f?") and (len(line) == 69):
+            fMsg = Comfortf_ReportAllFlags(line[1:])
+            for fMsgf in fMsg.flags:
+                flag_id = fMsgf.flag
+                state = int(fMsgf.state)
+                payload = "1" if state else "0"
+
+                self.publish(
+                    settings.ALARMFLAGTOPIC % flag_id,
+                    payload,
+                    qos=2,
+                    retain=True
+                )
+                time.sleep(0.01)
 
         # --- BYPASS LIST ---
         elif line[1:3] == "b?":
-            msg = ComfortB_ReportAllBypassZones(line[1:])
-            self.publish(settings.ALARMBYPASSTOPIC, msg.value, qos=2, retain=True)
+            bMsg = ComfortB_ReportAllBypassZones(line[1:])
+            if bMsg.value == 0:
+                self.publish(settings.ALARMBYPASSTOPIC, 0, qos=2, retain=True)
+            else:
+                self.publish(settings.ALARMBYPASSTOPIC, bMsg.value, qos=2, retain=True)
 
-        # --- OUTPUT EVENTS ---
-        elif line[1:3] == "ER":
-            msg = ComfortERArmReadyNotReady(line[1:])
-            if msg.zone != 0:
-                self.publish_alarm_message(f"Zone {msg.zone} Not Ready", retain=True)
+        # --- UID / SERIAL FALLBACK ---
+        elif line[1:9] == "DL7FF904":
+            if len(line[1:]) == 18:
+                settings.device_properties['uid'] = line[9:17]
+                decoded = ComfortSN_SerialNumberReport(line[5:17])
+                if decoded.serial_number != settings.COMFORT_SERIAL:
+                    settings.COMFORT_SERIAL = decoded.serial_number
+                    settings.device_properties['SerialNumber'] = settings.COMFORT_SERIAL
+            else:
+                settings.device_properties['uid'] = "00000000"
 
-        # --- ALARM ---
-        elif line[1:3] == "AM":
-            msg = ComfortAMSystemAlarmReport(line[1:])
-            self.publish_alarm_message(msg.message, retain=True)
+        # --- FLAG CHANGE ---
+        elif line[1:3] == "FL" and settings.CacheState:
+            flMsg = ComfortFLFlagActivationReport(line[1:])
+            payload = "1" if int(flMsg.state) else "0"
+            self.publish(settings.ALARMFLAGTOPIC % flMsg.flag, payload, qos=2, retain=True)
+            time.sleep(0.01)
 
-        elif line[1:3] == "AR":
-            msg = ComfortARSystemAlarmReport(line[1:])
-            self.publish_alarm_message(msg.message, retain=True)
+        # --- BYPASS CHANGE ---
+        elif line[1:3] == "BY" and settings.CacheState:
+            byMsg = ComfortBYBypassActivationReport(line[1:])
+            settings.BypassCache[byMsg.zone] = byMsg.state if byMsg.zone <= int(settings.COMFORT_INPUTS) else None
 
-        # --- ENTRY/EXIT ---
-        elif line[1:3] == "EX":
-            msg = ComfortEXEntryExitDelayStarted(line[1:])
-            if msg.type == 1:
-                self.publish(settings.ALARMSTATETOPIC, "pending", qos=2, retain=False)
-            elif msg.type == 2:
-                self.publish(settings.ALARMSTATETOPIC, "arming", qos=2, retain=False)
+            if byMsg.zone <= int(settings.COMFORT_INPUTS):
+                self.publish(settings.ALARMBYPASSTOPIC, byMsg.value, qos=2, retain=True)
+                time.sleep(0.01)
 
         # --- RESET ---
         elif line[1:3] == "RS":
@@ -2907,6 +3165,7 @@ class Comfort2(mqtt.Client):
 
         else:
             logger.debug("Unhandled line: %s", line)
+
 
 
 
