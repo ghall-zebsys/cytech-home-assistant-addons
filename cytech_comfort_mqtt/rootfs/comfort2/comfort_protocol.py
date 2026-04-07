@@ -177,43 +177,56 @@ class ComfortZ_ReportAllZones(object):
 
 
 class Comfort_RSensorActivationReport(object):
-    def __init__(self, datastr="", sensor=0, state=0):
+    def __init__(self, datastr="", sensor=0, value=0):
         if datastr:
             self.sensor = int(datastr[2:4], 16)
-            self.value = self.ComfortSigned16(int("%s%s" % (datastr[6:8], datastr[4:6]),16))    # Use new 16-bit format
+            self.value = self.ComfortSigned16(int("%s%s" % (datastr[6:8], datastr[4:6]), 16))
         else:
             self.sensor = sensor
-            self.value = state
+            self.value = value
 
-    def ComfortSigned16(self,value):        # Returns signed 16-bit value where required.
+    def ComfortSigned16(self, value):
         return -(value & 0x8000) | (value & 0x7fff)
 
+
 class Comfort_R_ReportAllSensors(object):
-    def __init__(self, data={}, sensor=0, value=0, counter=0, state=0):
+    def __init__(self, data="", sensor=0, value=0, counter=0, state=0):
         self.sensors = []
         self.counters = []
 
-        b = (len(data) - 8) // 4
+        # Bulk data is packed as 8-bit values (NOT 16-bit)
+        b = (len(data) - 8) // 2
+
         self.RegisterStart = int(data[4:6], 16)
         self.RegisterType = int(data[2:4], 16)
 
         for i in range(0, b):
-            rawbits = data[8 + (4 * i): 8 + (4 * i) + 4]
-            raw16 = int(rawbits[2:4] + rawbits[0:2], 16)
-            signed_value = self.ComfortSigned16(raw16)
+            # Extract ONE byte per value
+            rawbyte = data[8 + (2 * i): 8 + (2 * i) + 2]
+
+            if len(rawbyte) < 2:
+                continue  # safety guard
+
+            raw8 = int(rawbyte, 16)
+
+            # Convert signed 8-bit
+            if raw8 >= 0x80:
+                signed_value = raw8 - 0x100
+            else:
+                signed_value = raw8
 
             if self.RegisterType == 1:   # Sensor
-                self.sensor = self.RegisterStart + i
-                self.value = signed_value
                 self.sensors.append(
-                    Comfort_RSensorActivationReport("", self.RegisterStart + i, self.value)
+                    Comfort_RSensorActivationReport(
+                        "", self.RegisterStart + i, signed_value
+                    )
                 )
             else:   # Counter
-                self.counter = self.RegisterStart + i
-                self.value = signed_value
-                self.state = 1 if self.value != 0 else 0
+                state = 1 if signed_value != 0 else 0
                 self.counters.append(
-                    ComfortCTCounterActivationReport("", self.RegisterStart + i, self.value, self.state)
+                    ComfortCTCounterActivationReport(
+                        "", self.RegisterStart + i, signed_value, state
+                    )
                 )
 
     def ComfortSigned16(self, value):
