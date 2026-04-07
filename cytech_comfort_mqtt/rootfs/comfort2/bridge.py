@@ -2156,12 +2156,6 @@ class Comfort2(mqtt.Client):
             if i < 0 or i >= settings.UI_COUNTER_COUNT:
                 continue
 
-
-            # logger.info(
-            #     "publish_counter_discovery: raw key=%r value=%r type=%s",
-            #     key, value, type(value).__name__
-            # )
-
             if isinstance(value, dict):
                 counter_name = (value.get("Name") or value.get("name") or f"Counter{i:03d}").strip()
             elif isinstance(value, str):
@@ -2173,18 +2167,13 @@ class Comfort2(mqtt.Client):
             state_topic = settings.ALARMCOUNTERTOPIC % i
             command_topic = settings.ALARMCOUNTERCOMMANDTOPIC % i
 
-            # logger.info(
-            #     "publish_counter_discovery: counter=%s resolved_name=%r discovery_topic=%s state_topic=%s command_topic=%s",
-            #     i, counter_name, discovery_topic, state_topic, command_topic
-            # )
-
             mqtt_msg = json.dumps({
                 "name": counter_name,
                 "unique_id": f"{settings.DOMAIN}_counter{i:03d}",
                 "object_id": f"{settings.DOMAIN}_counter{i:03d}",
                 "state_topic": state_topic,
                 "command_topic": command_topic,
-                "value_template": "{{ value }}",
+                "value_template": "{{ value | int }}",
                 "command_template": "{{ value }}",
                 "availability": [
                     {
@@ -2218,13 +2207,8 @@ class Comfort2(mqtt.Client):
             except ValueError:
                 continue
 
-            if i < 0 or i >= settings.UI_SENSOR_COUNT:  # Only publish sensors that are within the UI-supported range
+            if i < 0 or i >= settings.UI_SENSOR_COUNT:
                 continue
-
-            # logger.info(
-            #     "publish_sensor_discovery: raw key=%r value=%r type=%s",
-            #     key, value, type(value).__name__
-            # )
 
             if isinstance(value, dict):
                 sensor_name = (value.get("Name") or value.get("name") or f"Sensor{i:03d}").strip()
@@ -2237,18 +2221,13 @@ class Comfort2(mqtt.Client):
             state_topic = settings.ALARMSENSORTOPIC % i
             command_topic = settings.ALARMSENSORCOMMANDTOPIC % i
 
-            # logger.info(
-            #     "publish_sensor_discovery: sensor=%s resolved_name=%r discovery_topic=%s state_topic=%s command_topic=%s",
-            #     i, sensor_name, discovery_topic, state_topic, command_topic
-            # )
-
             mqtt_msg = json.dumps({
                 "name": sensor_name,
                 "unique_id": f"{settings.DOMAIN}_sensor{i:03d}",
                 "object_id": f"{settings.DOMAIN}_sensor{i:03d}",
                 "state_topic": state_topic,
                 "command_topic": command_topic,
-                "value_template": "{{ value }}",
+                "value_template": "{{ value | int }}",
                 "command_template": "{{ value }}",
                 "availability": [
                     {
