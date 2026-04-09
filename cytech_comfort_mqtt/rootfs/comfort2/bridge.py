@@ -233,7 +233,7 @@ class LoggedSerial(serial.Serial):
             except Exception:
                 text = repr(data)
 
-            logger.debug("RX: %r", text)
+           # logger.debug("RX: %r", text)
 
         return data
 
@@ -1848,36 +1848,56 @@ class Comfort2(mqtt.Client):
 
 
     def clear_input_discovery(self):
-        max_inputs = int(settings.COMFORT_INPUTS)
+        """
+        Clear retained MQTT discovery configs for all known input topic styles.
+        This helps HA forget old entity IDs when discovery naming has changed.
+        """
+        max_inputs = int(getattr(settings, "MAX_ZONES", 96) or 96)
+        logger.warning("DISCOVERY CLEAR inputs: domain=%s max_inputs=%d", settings.DOMAIN, max_inputs)
 
         for i in range(1, max_inputs + 1):
-            topic = f"homeassistant/binary_sensor/{settings.DOMAIN}/input{i:03d}/config"
-            self.publish(topic, "", qos=2, retain=True)
-            time.sleep(0.005)
+            topics = [
+                # current padded format
+                f"homeassistant/binary_sensor/{settings.DOMAIN}/input{i:03d}/config",
+
+                # legacy non-padded format
+                f"homeassistant/binary_sensor/{settings.DOMAIN}/input{i}/config",
+            ]
+
+            for topic in topics:
+                logger.info("Clearing input discovery topic: %s", topic)
+                self.publish(topic, "", qos=1, retain=True)
+                time.sleep(0.005)
 
 
     def clear_output_discovery(self):
         """
-        Clear retained MQTT discovery configs for:
-        - standard Comfort outputs: output1..outputN
-        - SCSRIO outputs (legacy/stale): scsriooutput1..scsriooutputN (or at least 129+)
+        Clear retained MQTT discovery configs for all known output topic styles.
+        This removes stale HA entities from previous discovery naming schemes.
         """
-        max_outputs = int(getattr(settings, "MAX_OUTPUTS", 128) or 128)
+        max_outputs = int(getattr(settings, "MAX_OUTPUTS", 96) or 96)
         logger.warning("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
 
-        # Standard outputs
         for i in range(1, max_outputs + 1):
-            topic = f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
-            self.publish(topic, "", qos=1, retain=True)
-            time.sleep(0.005)            
+            topics = [
+                # current padded format
+                f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config",
 
-        # SCSRIO outputs (these should never exist in HA UI)
-        # Clear the full range so any legacy/stale ones are removed.
-        for i in range(1, max_outputs + 1):
-            topic = f"homeassistant/switch/{settings.DOMAIN}/output{i:03d}/config"
-            self.publish(topic, "", qos=1, retain=True)
-            time.sleep(0.005)
+                # legacy non-padded format
+                f"homeassistant/switch/{settings.DOMAIN}/output{i}/config",
 
+                # possible old alternate naming
+                f"homeassistant/switch/{settings.DOMAIN}/switch{i}/config",
+
+                # legacy SCSRIO output topics if they ever existed
+                f"homeassistant/switch/{settings.DOMAIN}/scsriooutput{i:03d}/config",
+                f"homeassistant/switch/{settings.DOMAIN}/scsriooutput{i}/config",
+            ]
+
+            for topic in topics:
+                logger.info("Clearing output discovery topic: %s", topic)
+                self.publish(topic, "", qos=1, retain=True)
+                time.sleep(0.005)
 
     def clear_flag_discovery(self):
         for i in range(1, 255):
@@ -1999,9 +2019,9 @@ class Comfort2(mqtt.Client):
             if isinstance(props, dict):
                 name = (props.get("Name") or props.get("name") or f"Output{i:03d}").strip()
             elif isinstance(props, str):
-                name = props.strip() or f"Output{i}"
+                name = props.strip() or f"Output{i:03d}"
             else:
-                name = f"Output{i}"
+                name = f"Output{i:03d}"
 
             # logger.info(
             #     "publish_output_discovery: output=%s resolved_name=%r discovery_topic=%s",
@@ -2050,7 +2070,7 @@ class Comfort2(mqtt.Client):
 
         for i in range(1, max_inputs + 1):
             logger.warning("Publishing input discovery entity %03d of %03d", i, max_inputs)
-            name = f"Zone{i}"
+            name = f"Zone{i:03d}"
             device_class = None
 
             if settings.ZONEMAPFILE:
