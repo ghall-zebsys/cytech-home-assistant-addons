@@ -201,12 +201,10 @@ logger.debug("MQTT_SERVER = %s", settings.MQTTBROKERIP)
 
 logger.debug("MQTT_PROTOCOL = %s/%s", settings.MQTTPROTOCOL, settings.MQTTPORT)
 logger.debug("COMFORT_LOGIN_ID = ******")
-logger.debug("COMFORT_CCLX_FILE = %s", settings.COMFORT_CCLX_FILE)
+#logger.debug("COMFORT_CCLX_FILE = %s", settings.COMFORT_CCLX_FILE)
 logger.debug("COMFORT_BATTERY_STATUS_ID = %s", settings.COMFORT_BATTERY_STATUS_ID)
 logger.debug("MQTT_LOG_LEVEL = %s", settings.LOG_VERBOSITY)
 logger.debug("COMFORT_TIME = %s", settings.COMFORT_TIME)
-logger.debug("BATTERYREFRESHTOPIC = %s", settings.BATTERYREFRESHTOPIC)
-logger.debug("COMFORT_BATTERY_STATUS_ID = %s", settings.COMFORT_BATTERY_STATUS_ID)
 logger.debug("CPUType = %s", settings.device_properties.get("CPUType"))
 
 
@@ -938,7 +936,7 @@ class Comfort2(mqtt.Client):
 
     def readcurrentstate(self):
  
-        logger.info("In readcurrentstate connected = %d", self.connected)
+        #logger.info("In readcurrentstate connected = %d", self.connected)
         if self.connected == True:
 
             settings.device_properties['BatteryVoltageMain'] = "-1"
@@ -967,22 +965,22 @@ class Comfort2(mqtt.Client):
             logger.info("Requesting Bypassed Zones")
             self.serial.write("\x03b?00\r".encode())       # b?00 Bypassed Zones first
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             
             #get Comfort FileSystem
             self.serial.write("\x03V?\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             
             #get CPU Type
             self.serial.write("\x03u?01\r".encode())         # Get CPU type for Main board.
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
 
             # Get the battery and DC supply status for main board
             self.serial.write("\x03D?0000\r".encode())       # Mainboard Battery and DC Supply Status
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
 
             # Get battery and DC supply status for installed SEM boards
             try:
@@ -1002,64 +1000,64 @@ class Comfort2(mqtt.Client):
                 self.serial.write((f"\x03D?{sem_address_hex}01\r").encode())
                 settings.SAVEDTIME = datetime.now()
                 logger.info("Requested SEM %d battery status using D?%s01", sem, sem_address_hex)
-                time.sleep(0.01)
+                time.sleep(0.05)
 
                 # DC supply voltage/status
                 self.serial.write((f"\x03D?{sem_address_hex}02\r").encode())
                 settings.SAVEDTIME = datetime.now()
                 logger.info("Requested SEM %d DC supply status using D?%s02", sem, sem_address_hex)
-                time.sleep(0.01)
+                time.sleep(0.05)
 
                       
             #get HW model
             self.serial.write("\x03EL\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
 
             #Used for Unique ID
             self.serial.write("\x03UL7FF904\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             
             #get Mainboard Serial Number
             self.serial.write("\x03SN01\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             
             self.serial.write("\x03M?\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             # #get all zone input states
             self.serial.write("\x03Z?\r".encode())       # Comfort Zones/Inputs
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
 
             #get all output states
             if ALARMNUMBEROFOUTPUTS > 0:
                 self.serial.write("\x03Y?\r".encode())
                 settings.SAVEDTIME = datetime.now()
-                time.sleep(0.01)
+                time.sleep(0.05)
 
             #get all flag states
             self.serial.write("\x03f?00\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             #get Alarm Status Information
             self.serial.write("\x03S?\r".encode())       # S? Status Request
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             #get Alarm Additional Information
             self.serial.write("\x03a?\r".encode())       # a? Status Request - For Future Use !!!
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
 
             #get all sensor values. 0 - 31
             self.serial.write("\x03r?010010\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
             self.serial.write("\x03r?011010\r".encode())
             settings.SAVEDTIME = datetime.now()
-            time.sleep(0.01)
+            time.sleep(0.05)
 
             #get all counter values
             for i in range(0, int((settings.ALARMNUMBEROFCOUNTERS+1) / 16)):          # Counters 0 to 254 Using 256/16 = 16 iterations
@@ -1068,20 +1066,20 @@ class Comfort2(mqtt.Client):
                 else:
                     self.serial.write("\x03r?00%X010\r".encode() % (i))
                 settings.SAVEDTIME = datetime.now()
-                time.sleep(0.1)
+                time.sleep(0.05)
             
             self.publish(settings.ALARMAVAILABLETOPIC, 1,qos=2,retain=True)
-            time.sleep(0.01)
+            time.sleep(0.05)
             self.publish(settings.ALARMLWTTOPIC, 'Online',qos=2,retain=True)
-            time.sleep(0.01)
+            time.sleep(0.05)
             self.publish(settings.ALARMMESSAGETOPIC, "",qos=2,retain=True)       # Empty string removes topic.
-            time.sleep(0.01)
+            time.sleep(0.05)
 
 
 
             if settings.BROKERCONNECTED and settings.COMFORTCONNECTED:
                 self.publish(settings.ALARMCONNECTEDTOPIC, 1,qos=2,retain=True)
-                time.sleep(0.01)
+                time.sleep(0.05)
 
 
     def UpdateBatteryStatus(self):
@@ -1852,7 +1850,7 @@ class Comfort2(mqtt.Client):
         This helps HA forget old entity IDs when discovery naming has changed.
         """
         max_inputs = int(getattr(settings, "MAX_ZONES", 96) or 96)
-        logger.info("DISCOVERY CLEAR inputs: domain=%s max_inputs=%d", settings.DOMAIN, max_inputs)
+        #logger.info("DISCOVERY CLEAR inputs: domain=%s max_inputs=%d", settings.DOMAIN, max_inputs)
 
         for i in range(1, max_inputs + 1):
             topics = [
@@ -1875,7 +1873,7 @@ class Comfort2(mqtt.Client):
         This removes stale HA entities from previous discovery naming schemes.
         """
         max_outputs = int(getattr(settings, "MAX_OUTPUTS", 96) or 96)
-        logger.info("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
+        #logger.info("DISCOVERY CLEAR outputs: domain=%s max_outputs=%d", settings.DOMAIN, max_outputs)
 
         for i in range(1, max_outputs + 1):
             topics = [
