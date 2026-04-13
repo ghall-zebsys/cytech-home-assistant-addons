@@ -693,7 +693,7 @@ class Comfort2(mqtt.Client):
         with self.update_lock:
             current = self.pending_counter_updates.get(counter)
             if current == value:
-                logger.info("Counter %d update already pending with value %d", counter, value)
+                logger.debug("Counter %d update already pending with value %d", counter, value)
                 return
 
             self.pending_counter_updates[counter] = value
@@ -707,14 +707,13 @@ class Comfort2(mqtt.Client):
             self.counter_timers[counter] = timer
             timer.start()
 
-        logger.info("Queued counter %d update to %d", counter, value)
-
+        
     def queue_sensor_update(self, sensor: int, value: int) -> None:
         """Queue a sensor write and debounce rapid updates."""
         with self.update_lock:
             current = self.pending_sensor_updates.get(sensor)
             if current == value:
-                logger.info("Sensor %d update already pending with value %d", sensor, value)
+                logger.debug("Sensor %d update already pending with value %d", sensor, value)
                 return
 
             self.pending_sensor_updates[sensor] = value
@@ -728,8 +727,7 @@ class Comfort2(mqtt.Client):
             self.sensor_timers[sensor] = timer
             timer.start()
 
-        logger.info("Queued sensor %d update to %d", sensor, value)
-
+       
     def flush_counter_update(self, counter: int) -> None:
         """Send the final debounced counter value to Comfort."""
         with self.update_lock:
@@ -739,7 +737,7 @@ class Comfort2(mqtt.Client):
         if value is None:
             return
 
-        logger.info("Flushing counter %d update to %d", counter, value)
+        logger.debug("Flushing counter %d update to %d", counter, value)
 
         try:
             self.set_counter(counter, value)
@@ -755,7 +753,7 @@ class Comfort2(mqtt.Client):
         if value is None:
             return
 
-        logger.info("Flushing sensor %d update to %d", sensor, value)
+        logger.debug("Flushing sensor %d update to %d", sensor, value)
 
         try:
             self.set_sensor(sensor, value)
@@ -3022,7 +3020,7 @@ class Comfort2(mqtt.Client):
         elif line[1:3] == "D?":
             Comfort_D_SystemVoltageReport(line[1:])
             logger.info(
-                "After parse: BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
+                "BatteryVoltageMain=%s ChargeVoltageMain=%s BatteryStatus=%s ChargerStatus=%s",
                 settings.device_properties.get("BatteryVoltageMain"),
                 settings.device_properties.get("ChargeVoltageMain"),
                 settings.device_properties.get("BatteryStatus"),
