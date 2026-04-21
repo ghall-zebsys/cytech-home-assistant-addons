@@ -1,6 +1,6 @@
 name: "Cytech Comfort"
 description: "Cytech Comfort MQTT Bridge"
-version: "1.0.0"
+version: "1.0.1-dev1"
 slug: "cytech_comfort_mqtt"
 init: false
 startup: application
@@ -36,6 +36,7 @@ map:
   - addon_config
 
 options:
+  comfort_baudrate: 115200
   mqtt_broker_address: core-mosquitto
   mqtt_user: null
   mqtt_password: null
@@ -53,7 +54,9 @@ options:
   alarm_responses: 0
   comfort_time: false
 
+
 schema:
+  comfort_baudrate: list(115200|9600)
   mqtt_broker_address: str
   mqtt_user: str?
   mqtt_password: password?

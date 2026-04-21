@@ -1,5 +1,11 @@
 ---
 configuration:
+  comfort_baudrate:
+    name: Comfort baud rate
+    description: >
+      Select the serial baud rate for the Comfort connection.
+      Use 115200 for UCMA/Pi.
+      Use 9600 for CM4Pi on CM9001.
   mqtt_broker_address:
     name: MQTT Broker Address
     description: >-

@@ -116,6 +116,7 @@ _opts = load_options()
 # ----------------------------
 
 # MQTT
+settings.COMFORT_BAUDRATE = get_int(_opts, "comfort_baudrate", 115200)
 settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
 settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
 settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
@@ -2624,10 +2625,11 @@ class Comfort2(mqtt.Client):
                 self.serial = None
 
                 try:
-                    logger.info("Opening Comfort serial port /dev/serial0 @ 115200")
+                    
+                    logger.info("Opening Comfort serial port /dev/serial0 @ %d", settings.BAUDRATE)
                     self.serial = LoggedSerial(
                         port='/dev/serial0',
-                        baudrate=115200,
+                        baudrate=settings.BAUDRATE,
                         timeout=0.2
                     )
 
