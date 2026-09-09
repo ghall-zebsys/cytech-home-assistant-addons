@@ -52,6 +52,7 @@ from markupsafe import escape
 
 # Project imports
 from options import load_options, get_str, get_int, get_bool
+from mqtt_tls import configure_client_tls
 
 _opts = load_options()
 
@@ -72,16 +73,50 @@ logger.debug("Web UI RAM logging initialised at %s", log_verbosity)
 import cclx_parser
 import settings
 
-MQTT_HOST = settings.MQTTBROKER
-MQTT_PORT = settings.MQTTPORT
-MQTT_USER = settings.MQTTUSERNAME
-MQTT_PASS = settings.MQTTPASSWORD
-
-logger.debug(
-    "WebUI MQTT config | host=%s port=%s user=%r pass_set=%s",
-    MQTT_HOST, MQTT_PORT, MQTT_USER, bool(MQTT_PASS)
+# webapp.py runs in a separate process from bridge.py, so it must load its
+# own MQTT runtime settings from the add-on options. Changes that bridge.py
+# makes to the settings module are not shared with this process.
+settings.MQTTUSERNAME = get_str(
+    _opts,
+    "mqtt_user",
+    settings.MQTTUSERNAME,
 )
 
+settings.MQTTPASSWORD = get_str(
+    _opts,
+    "mqtt_password",
+    settings.MQTTPASSWORD,
+)
+
+settings.MQTT_SECURITY = get_str(
+    _opts,
+    "mqtt_security",
+    "password",
+).strip().lower()
+
+if settings.MQTT_SECURITY not in {
+    "password",
+    "tls",
+    "mutual_tls",
+}:
+    raise RuntimeError(
+        f"Invalid MQTT security mode: {settings.MQTT_SECURITY}"
+    )
+
+settings.MQTT_TLS_ENABLED = settings.MQTT_SECURITY in {
+    "tls",
+    "mutual_tls",
+}
+
+settings.MQTT_MUTUAL_TLS = (
+    settings.MQTT_SECURITY == "mutual_tls"
+)
+
+settings.MQTTPORT = (
+    8883
+    if settings.MQTT_TLS_ENABLED
+    else 1883
+)
 
 
 # ---- Paths (use /data for production persistence) ----
@@ -93,8 +128,10 @@ LOCK_FILE = DATA_DIR / ".apply.lock"
 RELOAD_FLAG = DATA_DIR / "reload.flag"
 UPLOAD_META = DATA_DIR / "upload.meta.json"
 
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 RAM_LOG_FILE = Path("/dev/shm/cytech_comfort_mqtt.log")
+CA_CERT_FILE = Path("/ssl/cytech_comfort/ca.crt")
 
 app = Flask(__name__)
 
@@ -128,10 +165,19 @@ def _set_passthrough_mode(active: bool) -> None:
 
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 
-    if MQTT_USER:
-        c.username_pw_set(MQTT_USER, MQTT_PASS or "")
+    if settings.MQTTUSERNAME:
+        c.username_pw_set(settings.MQTTUSERNAME, settings.MQTTPASSWORD or "")
 
-    c.connect(MQTT_HOST, MQTT_PORT, 10)
+    configure_client_tls(
+        c,
+        enabled=settings.MQTT_TLS_ENABLED,
+        mutual_tls=settings.MQTT_MUTUAL_TLS,
+        ca_filename=settings.MQTT_CA_CERT,
+        client_cert_filename=settings.MQTT_CLIENT_CERT,
+        client_key_filename=settings.MQTT_CLIENT_KEY,
+    )
+
+    c.connect(settings.MQTTBROKER, settings.MQTTPORT, 10)
 
     c.publish(
         PASSTHROUGH_TOPIC,
@@ -147,7 +193,7 @@ def mqtt_publish_reload(reason: str | None = None) -> None:
     logger.warning("MQTT reload publish requested | topic=%s | reason=%s", RELOAD_TOPIC, reason)
     logger.warning(
         "MQTT connection params | host=%s | port=%s | user=%s | password_set=%s | domain=%s",
-        MQTT_HOST, MQTT_PORT, MQTT_USER, bool(MQTT_PASS), DOMAIN
+        settings.MQTTBROKER, settings.MQTTPORT, settings.MQTTUSERNAME, bool(settings.MQTTPASSWORD), DOMAIN
     )
 
     connected = threading.Event()
@@ -158,8 +204,9 @@ def mqtt_publish_reload(reason: str | None = None) -> None:
         rc_val = getattr(reason_code, "value", reason_code)
         logger.debug("MQTT on_connect reason_code=%s (value=%s)", reason_code, rc_val)
         conn_rc["rc"] = rc_val
-        if rc_val == 0:
-            connected.set()
+        # Wake the waiting request for both success and refusal. Otherwise a
+        # broker rejection causes repeated reconnects until the 10 s timeout.
+        connected.set()
 
     def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
         rc_val = getattr(reason_code, "value", reason_code)
@@ -169,16 +216,26 @@ def mqtt_publish_reload(reason: str | None = None) -> None:
     c.on_connect = _on_connect
     c.on_disconnect = _on_disconnect
 
-    if MQTT_USER:
-        c.username_pw_set(MQTT_USER, MQTT_PASS or "")
+    if settings.MQTTUSERNAME:
+        c.username_pw_set(settings.MQTTUSERNAME, settings.MQTTPASSWORD or "")
         logger.debug("MQTT auth configured (username provided)")
     else:
         logger.debug("MQTT auth not configured")
 
+
+    configure_client_tls(
+        c,
+        enabled=settings.MQTT_TLS_ENABLED,
+        mutual_tls=settings.MQTT_MUTUAL_TLS,
+        ca_filename=settings.MQTT_CA_CERT,
+        client_cert_filename=settings.MQTT_CLIENT_CERT,
+        client_key_filename=settings.MQTT_CLIENT_KEY,
+    )
+
     c.loop_start()
     try:
         logger.debug("Connecting to MQTT broker...")
-        c.connect_async(MQTT_HOST, MQTT_PORT, keepalive=10)
+        c.connect_async(settings.MQTTBROKER, settings.MQTTPORT, keepalive=10)
 
         if not connected.wait(timeout=10.0):
             raise RuntimeError("MQTT connect did not complete (timeout waiting for on_connect)")
@@ -300,6 +357,7 @@ def _try_parse_cclx(path: Path) -> Tuple[bool, str, Dict[str, Any]]:
                 "sensors": len(result.sensor_properties),
                 "timers": len(result.timer_properties),
                 "users": len(result.user_properties),
+                "responses": len(result.response_properties),
             }
 
             return True, "Parsed OK", summary
@@ -461,19 +519,21 @@ def home():
 """
 
     body = f"""
-{passthrough_html}
 
 <div class="card">
-  <div><strong>Logs</strong></div>
-  <div>View the live RAM log for bridge, web UI and passthrough activity.</div>
+  <div><strong>Cytech Comfort Add-on</strong></div>
+
   <div class="row" style="margin-top:10px;">
-    <a class="btn btn-primary" href="{url_for('view_log')}">Open Logs</a>
-    <a class="btn" href="{url_for('download_log')}">Download Full Log</a>
+    <a class="btn btn-primary" href="{url_for('home')}">CCLX</a>
+    <a class="btn" href="{url_for('view_log')}">Logs</a>
+    <a class="btn" href="{url_for('view_mqtt')}">MQTT</a>
   </div>
 </div>
 
+{passthrough_html}
+
 <div class="card">
-  <div><strong>3) CCLX Configuration</strong></div>
+  <div><strong>CCLX Configuration</strong></div>
   <div class="warn" style="margin-top:6px;">
     Use this section to upload, validate and apply a Comfort CCLX file.
   </div>
@@ -732,6 +792,118 @@ def rollback():
     return _html("Rollback", f"<p class='ok'>Rollback complete at {_now()}.</p><p><a href='{url_for('home')}'>Back</a></p>")
 
 
+@app.get("/mqtt")
+def view_mqtt():
+    mqtt_security = get_str(
+        _opts,
+        "mqtt_security",
+        "password",
+    ).strip().lower()
+
+    mqtt_port = 8883 if mqtt_security in {
+        "tls",
+        "mutual_tls",
+    } else 1883
+
+    mode_names = {
+        "password": "Password",
+        "tls": "TLS",
+        "mutual_tls": "Mutual TLS",
+    }
+
+    mode_text = mode_names.get(
+        mqtt_security,
+        mqtt_security,
+    )
+
+    body = f"""
+<div class="card">
+  <div><strong>Cytech Comfort Add-on</strong></div>
+
+  <div class="row" style="margin-top:10px;">
+    <a class="btn" href="{url_for('home')}">CCLX</a>
+    <a class="btn" href="{url_for('view_log')}">Logs</a>
+    <a class="btn btn-primary" href="{url_for('view_mqtt')}">MQTT</a>
+  </div>
+</div>
+
+<div class="card">
+  <div><strong>MQTT Security</strong></div>
+
+  <p>
+    The Cytech Comfort add-on can connect to the Mosquitto MQTT
+    broker using password authentication, TLS, or mutual TLS.
+  </p>
+
+  <div>
+    Current Comfort MQTT security mode:
+    <span class="pill">{html.escape(mode_text)}</span>
+  </div>
+
+  <div style="margin-top:8px;">
+    MQTT port: <code>{mqtt_port}</code>
+  </div>
+</div>
+
+<div class="card">
+  <div><strong>CA Certificate</strong></div>
+
+  <p>
+    When TLS is enabled, the Mosquitto broker uses a certificate
+    created specifically for this Home Assistant installation.
+  </p>
+
+  <p>
+    Other MQTT applications connecting securely on port 8883 may need
+    this CA certificate to verify that they are connecting to the
+    correct Mosquitto broker.
+  </p>
+
+  <div class="row" style="margin-top:12px;">
+    <a class="btn btn-primary"
+       href="{url_for('download_ca_certificate')}">
+      Download CA Certificate
+    </a>
+  </div>
+
+  <div class="warn" style="margin-top:12px;">
+    Only the public CA certificate is provided. Private certificate
+    keys are not available through the Web UI.
+  </div>
+</div>
+"""
+
+    return _html("Cytech Comfort MQTT", body)
+
+
+
+@app.get("/mqtt/ca/download")
+def download_ca_certificate():
+    if not CA_CERT_FILE.is_file():
+        return _html(
+            "CA Certificate",
+            f"""
+<p class="err">
+  The Cytech Comfort CA certificate has not been created yet.
+</p>
+
+<p>
+  <a href="{url_for('view_mqtt')}">Back to MQTT</a>
+</p>
+"""
+        ), 404
+
+    return send_file(
+        str(CA_CERT_FILE),
+        as_attachment=True,
+        download_name="cytech-comfort-ca.crt",
+        mimetype="application/x-x509-ca-cert",
+        conditional=True,
+    )
+
+
+
+
 @app.get("/log/raw")
 def raw_log():
     if not RAM_LOG_FILE.exists():
@@ -759,9 +931,10 @@ def view_log():
 <div class="card">
   <div><strong>Cytech Comfort Add-on</strong></div>
   <div class="row" style="margin-top:10px;">
-    <a class="btn" href="{url_for('home')}">Main</a>
+    <a class="btn" href="{url_for('home')}">CCLX</a>
     <a class="btn btn-primary" href="{url_for('view_log')}">Logs</a>
-  </div>
+    <a class="btn" href="{url_for('view_mqtt')}">MQTT</a>
+    </div>
 </div>
 
 <div class="card">

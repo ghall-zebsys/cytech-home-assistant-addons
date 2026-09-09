@@ -52,6 +52,14 @@ import settings
 
 from cclx_parser import parse_cclx
 from options import load_options, get_str, get_int, get_bool
+from mqtt_tls import configure_client_tls
+from certificate_manager import (
+    ensure_certificate_set,
+    deploy_mosquitto_tls_files,
+    mark_mosquitto_restart_required,
+    restart_mosquitto_if_required
+)
+from mosquitto_manager import ensure_managed_login, ensure_custom_configuration
 import comfort_protocol
 from passthrough import ComfortPassthroughServer
 
@@ -164,14 +172,90 @@ if settings.PASSTHROUGH_ENABLED:
 else:
     logger.info("Comfort Passthrough Server disabled")
    
-    
-# settings.MQTTBROKER = get_str(_opts, "mqtt_broker_address", "core-mosquitto")
-# settings.MQTTPORT = get_int(_opts, "mqtt_broker_port", 1883)
-# settings.MQTTUSERNAME = get_str(_opts, "mqtt_user", None)
-# settings.MQTTPASSWORD = get_str(_opts, "mqtt_password", None)
-# settings.MQTTPROTOCOL = get_str(_opts, "mqtt_protocol", "TCP")
-# #Optional resolved broker IP for diagnostics
-# settings.MQTTBROKERIP = get_ip_address(settings.MQTTBROKER)
+
+# MQTT
+
+settings.MQTTUSERNAME = get_str(
+    _opts,
+    "mqtt_user",
+    settings.MQTTUSERNAME,
+)
+
+settings.MQTTPASSWORD = get_str(
+    _opts,
+    "mqtt_password",
+    settings.MQTTPASSWORD,
+)
+
+settings.MQTT_SECURITY = get_str(
+    _opts,
+    "mqtt_security",
+    "password",
+).strip().lower()
+
+if settings.MQTT_SECURITY not in {
+    "password",
+    "tls",
+    "mutual_tls",
+}:
+    raise RuntimeError(
+        f"Invalid MQTT security mode: {settings.MQTT_SECURITY}"
+    )
+
+settings.MQTT_TLS_ENABLED = settings.MQTT_SECURITY in {
+    "tls",
+    "mutual_tls",
+}
+
+settings.MQTT_MUTUAL_TLS = (
+    settings.MQTT_SECURITY == "mutual_tls"
+)
+
+settings.MQTTPORT = (
+    8883
+    if settings.MQTT_TLS_ENABLED
+    else 1883
+)
+
+# Optional resolved broker IP for diagnostics
+settings.MQTTBROKERIP = get_ip_address(
+    settings.MQTTBROKER
+)
+
+
+try:
+    mosquitto_login_changed = ensure_managed_login(
+        settings.MQTTUSERNAME,
+        settings.MQTTPASSWORD,
+    )
+
+    logger.info(
+        "Mosquitto login configuration changed: %s",
+        mosquitto_login_changed,
+    )
+
+    mosquitto_custom_changed = False
+
+    if settings.MQTT_TLS_ENABLED:
+        mosquitto_custom_changed = ensure_custom_configuration()
+
+        logger.info(
+            "Mosquitto custom configuration changed: %s",
+            mosquitto_custom_changed,
+        )
+
+    if mosquitto_login_changed or mosquitto_custom_changed:
+        mark_mosquitto_restart_required()
+
+    # TLS startup deploys tls.conf before processing the pending restart.
+    if not settings.MQTT_TLS_ENABLED:
+        restart_mosquitto_if_required()
+
+except Exception:
+    logger.exception(
+        "Unable to configure Mosquitto login or custom configuration"
+    )
+    raise
 
 
 # Comfort
@@ -697,7 +781,7 @@ class Comfort2(mqtt.Client):
         elif msg.topic.startswith(settings.DOMAIN+"/response") and msg.topic.endswith("/set"):
             response = int(msg.topic.split("/")[1][8:])
             if self.connected:
-                if (response in range(1, ALARMNUMBEROFRESPONSES + 1)) and (response in range(256, 1025)):   # Check for  valid response numbers > 255 but less than Max.
+                if (response in range(1, ALARMNUMBEROFRESPONSES + 1)) and (response in range(256, 1024)):   # Responses 256 to 1023 use the 16-bit form.
                     result = self.DecimalToSigned16(response)                                               # Returns hex value.
                     self.serial.write(("\x03R!%s\r" % result).encode())                              # Response with 16-bit converted hex number
                     settings.SAVEDTIME = datetime.now()
@@ -1033,7 +1117,13 @@ class Comfort2(mqtt.Client):
 
 
     def readcurrentstate(self):
- 
+
+        if self.serial is None:
+            # Can be called from MQTT callbacks during the serial reconnect
+            # window, when self.serial has been reset to None.
+            logger.warning("readcurrentstate skipped: serial port not connected")
+            return
+
         if self.connected == True:
 
             settings.device_properties['BatteryVoltageMain'] = "-1"
@@ -1365,6 +1455,11 @@ class Comfort2(mqtt.Client):
         if not getattr(self, "_timers_discovery_published", False):
             self.publish_timer_discovery(settings.MQTT_DEVICE_COMFORT)
             self._timers_discovery_published = True
+
+        # Publish named Comfort Response buttons from the active CCLX
+        if not getattr(self, "_responses_discovery_published", False):
+            self.publish_response_discovery(settings.MQTT_DEVICE_COMFORT)
+            self._responses_discovery_published = True
 
         self.PublishBatteryVoltageDiscovery()
 
@@ -1718,6 +1813,7 @@ class Comfort2(mqtt.Client):
         settings.sensor_properties = res.sensor_properties
         settings.timer_properties = res.timer_properties
         settings.user_properties = res.user_properties
+        settings.response_properties = res.response_properties
 
         settings.DEVICEMAPFILE  = res.flags.devicemap
         settings.ZONEMAPFILE    = res.flags.zonemap
@@ -1727,6 +1823,7 @@ class Comfort2(mqtt.Client):
         settings.SENSORMAPFILE  = res.flags.sensormap
         settings.TIMERMAPFILE   = res.flags.timermap
         settings.USERMAPFILE    = res.flags.usermap
+        settings.RESPONSEMAPFILE = res.flags.responsemap
 
         return file
 
@@ -1817,6 +1914,7 @@ class Comfort2(mqtt.Client):
         settings.flag_properties = {}
         settings.user_properties = {}
         settings.timer_properties = {}
+        settings.response_properties = {}
         # Anything else add_descriptions() populates should be reset here.
         # also clear these CCLX “flags” so publish_input_discovery uses the new file cleanly
         settings.DEVICEMAPFILE  = False
@@ -1827,6 +1925,7 @@ class Comfort2(mqtt.Client):
         settings.SENSORMAPFILE  = False
         settings.TIMERMAPFILE   = False
         settings.USERMAPFILE    = False
+        settings.RESPONSEMAPFILE = False
 
 
     # def purge_stale_output_discovery(self, start: int = 129, end: int = 255):
@@ -1914,6 +2013,7 @@ class Comfort2(mqtt.Client):
             self.clear_counter_discovery()
             self.clear_sensor_discovery()
             self.clear_timer_discovery()
+            self.clear_response_discovery()
             self.clear_battery_voltage_discovery()
 
             data_cclx = Path("/data/site.cclx")
@@ -1937,6 +2037,7 @@ class Comfort2(mqtt.Client):
                 self.publish_counter_discovery(mqtt_device_comfort)
                 self.publish_sensor_discovery(mqtt_device_comfort)
                 self.publish_timer_discovery(mqtt_device_comfort)
+                self.publish_response_discovery(mqtt_device_comfort)
                 self.PublishBatteryVoltageDiscovery()
                 self.PublishBatteryVoltageStates()
             else:
@@ -2049,6 +2150,13 @@ class Comfort2(mqtt.Client):
             self.publish(number_topic, None, qos=2, retain=True)
             self.publish(sensor_topic, None, qos=2, retain=True)
             time.sleep(0.005)
+
+    def clear_response_discovery(self):
+        """Remove retained discovery for all supported Comfort Responses."""
+        for i in range(1, int(settings.MAX_RESPONSES) + 1):
+            topic = f"homeassistant/button/{settings.DOMAIN}/response{i:04d}/config"
+            self.publish(topic, None, qos=1, retain=True)
+            time.sleep(0.002)
 
   
 
@@ -2444,6 +2552,56 @@ class Comfort2(mqtt.Client):
             self.publish(discovery_topic, mqtt_msg, qos=2, retain=True)
             time.sleep(0.01)
 
+    def publish_response_discovery(self, mqtt_device):
+        """Publish named normal CCLX Responses as momentary HA buttons."""
+        max_responses = int(getattr(settings, "COMFORT_RESPONSES", 0) or 0)
+        if max_responses <= 0:
+            logger.info("Response discovery disabled: alarm_responses is 0")
+            return
+
+        for key, value in settings.response_properties.items():
+            try:
+                i = int(key)
+            except (TypeError, ValueError):
+                logger.warning("publish_response_discovery: skipping non-integer key=%r", key)
+                continue
+
+            if i < 1 or i > max_responses:
+                continue
+
+            if isinstance(value, dict):
+                response_name = (value.get("Name") or value.get("name") or f"Response{i:04d}").strip()
+            elif isinstance(value, str):
+                response_name = value.strip() or f"Response{i:04d}"
+            else:
+                response_name = f"Response{i:04d}"
+
+            discovery_topic = f"homeassistant/button/{settings.DOMAIN}/response{i:04d}/config"
+            payload = {
+                "name": response_name,
+                "unique_id": f"{settings.DOMAIN}_response{i:04d}",
+                "object_id": f"{settings.DOMAIN}_response{i:04d}",
+                "command_topic": settings.ALARMRESPONSECOMMANDTOPIC % i,
+                "payload_press": "PRESS",
+                "availability": [
+                    {
+                        "topic": settings.ALARMAVAILABLETOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                    {
+                        "topic": settings.ALARMCONNECTEDTOPIC,
+                        "payload_available": "1",
+                        "payload_not_available": "0",
+                    },
+                ],
+                "availability_mode": "all",
+                "icon": "mdi:gesture-tap-button",
+                "device": mqtt_device,
+            }
+            self.publish(discovery_topic, json.dumps(payload), qos=1, retain=True)
+            time.sleep(0.01)
+
 
     def PublishBatteryVoltageDiscovery(self):
         """Publish MQTT discovery for main battery/DC voltage sensors and installed SEM boards only.
@@ -2830,7 +2988,12 @@ class Comfort2(mqtt.Client):
          #   logger.debug("RX: %s", line[1:])
             logger.debug("RX FULL: %s", line[1:])
 
-            self.handle_serial_line(line)
+            try:
+                self.handle_serial_line(line)
+            except Exception:
+                # A malformed/truncated serial line must never take down the
+                # bridge. Log it, drop the line and carry on.
+                logger.exception("Error handling serial line %r, ignoring", line)
 
 
     def handle_serial_line(self, line):
@@ -2907,17 +3070,6 @@ class Comfort2(mqtt.Client):
             ipMsg = comfort_protocol.ComfortIPInputActivationReport(line[1:])
 
             if ipMsg.state < 2:
-
-                try:
-                    _name = settings.input_properties[str(ipMsg.input)]['Name'] if settings.ZONEMAPFILE else f"Zone{ipMsg.input:02d}"
-                except KeyError:
-                    _name = f"Zone{ipMsg.input}"
-
-                try:
-                    _zoneword = settings.input_properties[str(ipMsg.input)]['ZoneWord'] if settings.ZONEMAPFILE else ""
-                except KeyError:
-                    _zoneword = ""
-
                 settings.ZoneCache[ipMsg.input] = ipMsg.state
 
                 if 1 <= ipMsg.input <= int(settings.COMFORT_INPUTS):
@@ -2928,17 +3080,6 @@ class Comfort2(mqtt.Client):
                         retain=True
                     )
                     time.sleep(0.01)
-
-                log_msg = json.dumps({
-                    "Time": datetime.now().replace(microsecond=0).isoformat(),
-                    "Type": "input",
-                    "Id": ipMsg.input,
-                    "Name": _name,
-                    "ZoneWord": _zoneword,
-                    "State": int(ipMsg.state),
-                    "Bypass": settings.BypassCache[ipMsg.input]
-                })
-                self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
 
         # --- COUNTERS ---
         elif line[1:3] == "CT":
@@ -2986,19 +3127,10 @@ class Comfort2(mqtt.Client):
             ipMsgTR = comfort_protocol.ComfortTRReport(line[1:])
             timer_id = ipMsgTR.timer
             value = ipMsgTR.value
-            state = ipMsgTR.state
             topic = settings.COMFORTTIMERSTOPIC % timer_id
 
             self.publish(topic, str(value), qos=2, retain=True)
 
-            log_msg = json.dumps({
-                "Time": datetime.now().replace(microsecond=0).isoformat(),
-                "Type": "timer",
-                "Id": timer_id,
-                "Value": value,
-                "State": state
-            })
-            self.publish(settings.ALARMLOGTOPIC, log_msg, qos=2, retain=False)
             time.sleep(0.01)
 
         # --- LOGIN REPORT ---
@@ -3132,7 +3264,10 @@ class Comfort2(mqtt.Client):
 
         # --- ARM READY / NOT READY ---
 
-        elif line[1:3] == "ER": 
+        elif line[1:3] == "ER":
+            if len(line) < 5:
+                logger.warning("Ignoring truncated ER message: %r", line)
+                return
             if not settings.CacheState:
                 logger.debug("Ignoring ER (CacheState=False): %s", line)
                 return
@@ -3265,6 +3400,12 @@ class Comfort2(mqtt.Client):
 
         # --- BYPASS LIST ---
         elif line[1:3] == "b?":
+            # line[1:] is "b?00" + hex payload; the parser slices the payload
+            # into 8-bit segments, so it must be non-empty and an even number
+            # of hex digits or indexing runs past the final segment.
+            if len(line) <= 5 or (len(line) - 5) % 2 != 0:
+                logger.warning("Ignoring truncated b? message: %r", line)
+                return
             bMsg = comfort_protocol.ComfortB_ReportAllBypassZones(line[1:])
             if bMsg.value == 0:
                 self.publish(settings.ALARMBYPASSTOPIC, 0, qos=2, retain=True)
@@ -3383,6 +3524,13 @@ class Comfort2(mqtt.Client):
             "items": (settings.timer_properties or {})
         })
 
+        self._publish_meta("responses", {
+            "time": ts,
+            "source": {"cclx_file": settings.COMFORT_CCLX_FILE, "enabled": bool(settings.RESPONSEMAPFILE)},
+            "count": len(settings.response_properties or {}),
+            "items": (settings.response_properties or {})
+        })
+
         # Optional: quick index/health topic
         self._publish_meta("summary", {
             "time": ts,
@@ -3395,6 +3543,7 @@ class Comfort2(mqtt.Client):
                 "sensors": bool(settings.SENSORMAPFILE),
                 "users": bool(settings.USERMAPFILE),
                 "timers": bool(settings.TIMERMAPFILE),
+                "responses": bool(settings.RESPONSEMAPFILE),
                 "devices": bool(settings.DEVICEMAPFILE),
             },
             "counts": {
@@ -3405,6 +3554,7 @@ class Comfort2(mqtt.Client):
                 "sensors": len(settings.sensor_properties or {}),
                 "users": len(settings.user_properties or {}),
                 "timers": len(settings.timer_properties or {}),
+                "responses": len(settings.response_properties or {}),
             }
         })
 
@@ -3416,6 +3566,34 @@ def main():
     global mqttc
     MQTT_VERSION = mqtt.MQTTv5
 
+    if settings.MQTT_TLS_ENABLED:
+        logger.info("Checking MQTT certificate installation")
+
+        try:
+            ensure_certificate_set()
+
+            logger.info("Checking MQTT TLS deployment")
+
+            mosquitto_tls_changed = deploy_mosquitto_tls_files(
+                require_client_certificate=settings.MQTT_MUTUAL_TLS,
+            )
+
+            if mosquitto_tls_changed:
+                mark_mosquitto_restart_required()
+
+            restart_mosquitto_if_required()
+
+        except Exception:
+            logger.exception("MQTT certificate setup failed")
+            raise
+
+    else:
+        logger.info(
+            "MQTT password mode selected - TLS certificate setup not required"
+        )
+
+
+
     mqttc = Comfort2(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=settings.mqtt_client_id,
@@ -3423,6 +3601,16 @@ def main():
         transport=settings.MQTTPROTOCOL
     )
 
+
+    configure_client_tls(
+        mqttc,
+        enabled=settings.MQTT_TLS_ENABLED,
+        mutual_tls=settings.MQTT_MUTUAL_TLS,
+        ca_filename=settings.MQTT_CA_CERT,
+        client_cert_filename=settings.MQTT_CLIENT_CERT,
+        client_key_filename=settings.MQTT_CLIENT_KEY,
+    )
+        
     mqttc.init(
         settings.MQTTBROKER,
         settings.MQTTPORT,

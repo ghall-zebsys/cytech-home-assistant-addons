@@ -46,7 +46,7 @@ SupportedFirmware = float(7.201)  # Minimum Supported firmware.
 
 MAX_ZONES = 128                   # Configurable for future expansion
 MAX_OUTPUTS = 96                  # Configurable for future expansion
-MAX_RESPONSES = 1024              # Configurable for future expansion
+MAX_RESPONSES = 1023              # Comfort II Ultra maximum; Optimum supports 128
 COMFORT_TIMERS = 64               # Default number of timers supported by Comfort II. Max 64.
 MAX_FLAGS = 254                   # Configurable for future expansion. Max 254.
 MAX_COUNTERS = 255                # Configurable for future expansion. Max 255.
@@ -69,15 +69,24 @@ rand_int = lower + secrets.randbelow(upper - lower + 1)
 rand_hex_str = hex(rand_int)
 mqtt_client_id = DOMAIN+"-"+str(rand_hex_str[2:])       # Generate pseudo random client-id each time it starts.
 
-MQTTBROKER = "core-mosquitto"
-MQTTBROKERIP = None
-MQTTPORT = 1883
-
+# Some MQTT settings are populated from options at runtime - these are fallback defaults
 MQTTUSERNAME = "comfortHA"
 MQTTPASSWORD = "comfortHA"
 
 MQTTPROTOCOL = "TCP"
 
+# MQTT TLS settings
+MQTT_TLS_ENABLED = False
+MQTT_MUTUAL_TLS = False
+
+MQTTBROKER = "core-mosquitto"
+MQTTBROKERIP = None
+
+MQTT_CA_CERT = "cytech_comfort/ca.crt"
+MQTT_CLIENT_CERT = "cytech_comfort/comfort-client.crt"
+MQTT_CLIENT_KEY = "cytech_comfort/comfort-client.key"
+
+MQTTPORT = 8883 if MQTT_TLS_ENABLED else 1883
 
 LOG_VERBOSITY = "INFO"
 
@@ -154,6 +163,7 @@ FLAGMAPFILE = False
 DEVICEMAPFILE = False
 USERMAPFILE = False
 TIMERMAPFILE = False
+RESPONSEMAPFILE = False
 
 # -------------------------------------------------------------------
 # Enrichment dictionaries (from CCLX / description files)
@@ -167,6 +177,7 @@ sensor_properties = {}
 flag_properties = {}
 user_properties = {}
 timer_properties = {}
+response_properties = {}
 
 file_exists  = False
 ACFail = False              # Indicates ACFail status.
